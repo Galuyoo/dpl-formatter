@@ -1,4 +1,5 @@
 # app.py
+import os
 import re
 import pandas as pd
 import streamlit as st
@@ -6,9 +7,103 @@ from io import BytesIO
 from datetime import datetime
 from openpyxl.utils import get_column_letter
 
-from utils.metrics_logger import log_event, get_session_id
+from utils.metrics_logger import log_event, get_session_id, get_metrics_worksheet
 
 st.set_page_config(page_title="DPL Formatter", layout="centered")
+
+APP_NAME = "DPL Formatter"
+APP_VERSION = "1.1.0"
+
+
+# ---------- Local admin-only metrics ----------
+def is_local_environment() -> bool:
+    return os.getenv("STREAMLIT_RUNTIME_ENV") != "cloud"
+
+
+def load_metrics_df() -> pd.DataFrame:
+    try:
+        ws = get_metrics_worksheet()
+        records = ws.get_all_records()
+        if not records:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(records)
+
+        numeric_cols = [
+            "input_rows",
+            "total_orders",
+            "total_products",
+            "lbt_count",
+            "parcel_count",
+            "track24_count",
+            "trackparcel_count",
+        ]
+
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        if "success" in df.columns:
+            df["success"] = df["success"].astype(str)
+
+        text_cols = [
+            "timestamp_utc",
+            "session_id",
+            "event_name",
+            "app_name",
+            "app_version",
+            "file_name",
+            "file_type",
+            "error_message",
+        ]
+
+        for col in text_cols:
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str)
+
+        return df
+
+    except Exception:
+        return pd.DataFrame()
+
+
+def render_admin_metrics() -> None:
+    if not is_local_environment():
+        return
+
+    with st.expander("📊 Admin Metrics (Local Only)", expanded=False):
+        df = load_metrics_df()
+
+        if df.empty:
+            st.info("No metrics logged yet.")
+            return
+
+        process_df = df[df["event_name"] == "process_success"].copy()
+        total_runs = int(len(process_df))
+        total_orders = int(pd.to_numeric(process_df["total_orders"], errors="coerce").fillna(0).sum())
+        total_products = int(pd.to_numeric(process_df["total_products"], errors="coerce").fillna(0).sum())
+        total_downloads = int(df["event_name"].astype(str).str.startswith("download_").sum())
+        unique_sessions = int(df["session_id"].astype(str).nunique())
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Runs", total_runs)
+        c2.metric("Orders", total_orders)
+        c3.metric("Products", total_products)
+        c4.metric("Downloads", total_downloads)
+        c5.metric("Sessions", unique_sessions)
+
+        if not process_df.empty:
+            chart_df = process_df.copy()
+            chart_df["timestamp_utc"] = pd.to_datetime(chart_df["timestamp_utc"], errors="coerce")
+            chart_df["total_orders"] = pd.to_numeric(chart_df["total_orders"], errors="coerce").fillna(0)
+            chart_df = chart_df.dropna(subset=["timestamp_utc"]).sort_values("timestamp_utc")
+
+            if not chart_df.empty:
+                st.subheader("Orders Processed Over Time")
+                st.line_chart(chart_df.set_index("timestamp_utc")["total_orders"])
+
+        st.subheader("Recent Events")
+        st.dataframe(df.tail(20), width="stretch")
 
 
 # ---------- Config ----------
@@ -192,11 +287,7 @@ def transform_orders(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict
 
     df["order reference"] = df["order reference"].astype(str).str.strip() + "." + df["__Category"]
 
-    df["Product Name"] = (
-        df["Product"]
-        .astype(str)
-        .apply(lambda x: wrap_product_name(x, 35))
-    )
+    df["Product Name"] = df["Product"].astype(str).apply(lambda x: wrap_product_name(x, 35))
 
     display_cols = [
         "order reference",
@@ -284,13 +375,15 @@ def get_file_type(filename: str) -> str:
 
 # ---------- Streamlit UI ----------
 def main():
-    st.title("DPL Formatter")
+    st.title(APP_NAME)
     st.caption("Upload orders and generate the Click & Drop ready output.")
 
-    # one log per session
+    if st.secrets.get("SHOW_ADMIN_METRICS", False):
+        render_admin_metrics()
+
     get_session_id()
     if "app_open_logged" not in st.session_state:
-        log_event("app_open", success=True)
+        log_event("app_open", success=True, app_name=APP_NAME, app_version=APP_VERSION)
         st.session_state["app_open_logged"] = True
 
     uploaded_file = st.file_uploader(
@@ -310,6 +403,8 @@ def main():
             file_name=file_name,
             file_type=file_type,
             success=True,
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
         )
         st.session_state["last_uploaded_name"] = file_name
 
@@ -323,6 +418,8 @@ def main():
             file_type=file_type,
             success=False,
             error_message=str(e),
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
         )
         st.error("Invalid file format. Please upload the standard order export.")
         return
@@ -346,6 +443,8 @@ def main():
             track24_count=int(category_counts["Track24"]),
             trackparcel_count=int(category_counts["TrackParcel"]),
             success=True,
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
         )
         st.session_state["last_success_logged_for"] = file_name
 
@@ -386,6 +485,8 @@ def main():
                 track24_count=int(category_counts["Track24"]),
                 trackparcel_count=int(category_counts["TrackParcel"]),
                 success=True,
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
             )
 
     with col2:
@@ -408,10 +509,12 @@ def main():
                 track24_count=int(category_counts["Track24"]),
                 trackparcel_count=int(category_counts["TrackParcel"]),
                 success=True,
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
             )
 
     st.subheader("Preview")
-    st.dataframe(preview_df.head(20), use_container_width=True)
+    st.dataframe(preview_df.head(20), width="stretch")
 
 
 if __name__ == "__main__":

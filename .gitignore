@@ -5,3 +5,5 @@ __pycache__/
 .env
 .streamlit/
 .history/
+.streamlit/secrets.toml
+*.json
