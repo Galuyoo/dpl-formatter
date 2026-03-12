@@ -1,4 +1,5 @@
 # app.py
+import re
 import pandas as pd
 import streamlit as st
 from io import BytesIO
@@ -345,7 +346,7 @@ def main():
     c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
 
     st.subheader("Preview")
-    st.dataframe(preview_df.head(20), width="stretch")
+    st.dataframe(preview_df.head(20), use_container_width=True)
 
     csv_bytes = df_out.to_csv(index=False).encode("utf-8")
     excel_bytes = to_excel_autofit(df_out)
