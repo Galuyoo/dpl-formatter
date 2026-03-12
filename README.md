@@ -1,3 +1,4 @@
+![CI](https://github.com/Galuyoo/dpl-formatter/actions/workflows/ci.yml/badge.svg)
 # DPL Formatter
 
 **DPL Formatter** is a lightweight automation tool designed to convert
