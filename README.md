@@ -39,6 +39,26 @@ Users can:
 This removes repetitive operational work and ensures consistent output
 formatting.
 
+## Operational Impact
+
+Before automation, warehouse staff had to manually prepare Royal Mail Click & Drop imports by processing orders individually. This involved reviewing each order, determining the correct shipment type, and formatting the data manually.
+
+DPL Formatter automates this process by applying deterministic classification rules and generating a Click & Drop compatible file instantly.
+
+The impact of this automation includes:
+
+- transforming a manual task that could take hours into a process completed in seconds
+- eliminating repetitive formatting work
+- reducing human error in shipment classification
+- enabling fast processing of large order batches during peak periods
+
+This is particularly valuable during high-volume seasons such as Christmas, where order throughput increases significantly.
+
+The warehouse processes orders from multiple drop-shippers whose stores cannot be directly connected to the Click & Drop account. DPL Formatter bridges this gap by converting exported order data into a format immediately compatible with Royal Mail's shipping system.
+
+## Application Interface
+
+![DPL Formatter Interface](docs/interface.png)
 ------------------------------------------------------------------------
 
 # Architecture
