@@ -327,7 +327,7 @@ def main():
         df_in = load_input_file(uploaded_file)
         preview_df, df_out, stats = transform_orders(df_in)
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error("Invalid file format. Please upload the standard order export.")
         return
 
     category_counts = (
@@ -345,9 +345,6 @@ def main():
     c3.metric("Parcel", int(category_counts["Parcel"]))
     c4.metric("Track24", int(category_counts["Track24"]))
     c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
-
-    st.subheader("Preview")
-    st.dataframe(preview_df.head(20), use_container_width=True)
 
     csv_bytes = df_out.to_csv(index=False).encode("utf-8")
     excel_bytes = to_excel_autofit(df_out)
@@ -371,6 +368,9 @@ def main():
             file_name=xlsx_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+    st.subheader("Preview")
+    st.dataframe(preview_df.head(20), use_container_width=True)
 
 
 if __name__ == "__main__":
