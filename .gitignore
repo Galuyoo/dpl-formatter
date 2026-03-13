@@ -7,3 +7,5 @@ __pycache__/
 .history/
 .streamlit/secrets.toml
 *.json
+*.pdf
+test.py
