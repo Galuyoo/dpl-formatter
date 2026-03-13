@@ -3,3 +3,4 @@ pandas
 openpyxl
 gspread
 google-auth
+pdfplumber

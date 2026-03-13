@@ -3,16 +3,17 @@ import os
 import re
 import pandas as pd
 import streamlit as st
+import pdfplumber
 from io import BytesIO
 from datetime import datetime
 from openpyxl.utils import get_column_letter
 
 from utils.metrics_logger import log_event, get_session_id, get_metrics_worksheet
 
-st.set_page_config(page_title="DPL Formatter", layout="centered")
+st.set_page_config(page_title="Formatter", layout="centered")
 
-APP_NAME = "DPL Formatter"
-APP_VERSION = "1.1.0"
+APP_NAME = "Formatter"
+APP_VERSION = "1.2.0"
 
 
 # ---------- Local admin-only metrics ----------
@@ -117,6 +118,11 @@ REQUIRED_INPUT_COLUMNS = [
     "Postcode",
 ]
 
+TRACKING_REQUIRED_COLUMNS = [
+    "Name",
+    "Postcode",
+]
+
 TRACKED_KEYWORDS = [
     "tracked",
     "tracked 24",
@@ -141,6 +147,9 @@ BIG_SIZE_PATTERNS = [
 
 MULTI_ITEM_SEPARATORS = [",", ";", "\n"]
 
+TRACKING_PATTERN = re.compile(r"\b[A-Z]{2}\s\d{4}\s\d{4}\s\d[A-Z]{2}\b")
+UK_POSTCODE_PATTERN = re.compile(r"^[A-Z]{1,2}\d[A-Z0-9]?\d[A-Z]{2}$")
+
 
 # ---------- Text helpers ----------
 def normalize_text(value) -> str:
@@ -150,6 +159,22 @@ def normalize_text(value) -> str:
     txt = str(value).strip().upper()
     txt = txt.replace("_", " ")
     txt = re.sub(r"\s+", " ", txt)
+    return txt
+
+
+def normalize_compare_text(value) -> str:
+    if pd.isna(value):
+        return ""
+    txt = str(value).upper().strip()
+    txt = re.sub(r"[^A-Z0-9]", "", txt)
+    return txt
+
+
+def normalize_postcode(value) -> str:
+    if pd.isna(value):
+        return ""
+    txt = str(value).upper().strip()
+    txt = re.sub(r"\s+", "", txt)
     return txt
 
 
@@ -275,6 +300,16 @@ def validate_input_columns(df: pd.DataFrame) -> None:
         )
 
 
+def validate_tracking_input_columns(df: pd.DataFrame) -> None:
+    missing = [col for col in TRACKING_REQUIRED_COLUMNS if col not in df.columns]
+    if missing:
+        raise ValueError(
+            "Tracking merge file is missing required columns: "
+            + ", ".join(missing)
+            + ". It must contain at least Name and Postcode."
+        )
+
+
 # ---------- Transform logic ----------
 def transform_orders(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     df = df.copy()
@@ -362,6 +397,32 @@ def build_output_filenames() -> tuple[str, str]:
     )
 
 
+def build_tracking_output_filename(original_name: str) -> str:
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    base, ext = os.path.splitext(original_name)
+    return f"{base}_with_tracking_{stamp}{ext.lower()}"
+
+
+def dataframe_to_download_bytes(df: pd.DataFrame, original_name: str) -> tuple[bytes, str, str]:
+    lower = original_name.lower()
+
+    if lower.endswith(".csv"):
+        return (
+            df.to_csv(index=False).encode("utf-8"),
+            build_tracking_output_filename(original_name),
+            "text/csv",
+        )
+
+    if lower.endswith((".xlsx", ".xls")):
+        return (
+            to_excel_autofit(df),
+            build_tracking_output_filename(original_name),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    raise ValueError("Unsupported output file type.")
+
+
 def get_file_type(filename: str) -> str:
     lower = filename.lower()
     if lower.endswith(".csv"):
@@ -370,26 +431,145 @@ def get_file_type(filename: str) -> str:
         return "xlsx"
     if lower.endswith(".xls"):
         return "xls"
+    if lower.endswith(".pdf"):
+        return "pdf"
     return "unknown"
 
 
-# ---------- Streamlit UI ----------
-def main():
-    st.title(APP_NAME)
-    st.caption("Upload orders and generate the Click & Drop ready output.")
+# ---------- PDF label extraction ----------
+def extract_label_pages(pdf_file) -> list[dict]:
+    pages_data = []
 
-    if st.secrets.get("SHOW_ADMIN_METRICS", False):
-        render_admin_metrics()
+    with pdfplumber.open(pdf_file) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
 
-    get_session_id()
-    if "app_open_logged" not in st.session_state:
-        log_event("app_open", success=True, app_name=APP_NAME, app_version=APP_VERSION)
-        st.session_state["app_open_logged"] = True
+            tracking_match = TRACKING_PATTERN.search(text)
+            if not tracking_match:
+                raise ValueError(f"No tracking number found on page {page_num}")
 
-    uploaded_file = st.file_uploader(
-        "Drop your orders file here (.csv / .xlsx / .xls)",
-        type=["csv", "xlsx", "xls"],
-    )
+            pages_data.append(
+                {
+                    "page": page_num,
+                    "tracking": tracking_match.group(),
+                    "raw_text": text,
+                }
+            )
+
+    return pages_data
+
+# ---------- Tracking verification ----------
+def verify_row_matches_label(row: pd.Series, label_page: dict) -> tuple[bool, str]:
+    csv_name_raw = str(row.get("Name", "")).strip()
+    csv_postcode_raw = str(row.get("Postcode", "")).strip()
+
+    csv_name = normalize_compare_text(csv_name_raw)
+    csv_postcode = normalize_postcode(csv_postcode_raw)
+
+    page_text = label_page.get("raw_text", "") or ""
+    page_text_normalized = normalize_compare_text(page_text)
+    page_text_postcode_normalized = normalize_postcode(page_text)
+
+    if not csv_name:
+        return False, "Missing Name in input row"
+
+    if not csv_postcode:
+        return False, "Missing Postcode in input row"
+
+    if csv_name not in page_text_normalized:
+        return False, f"Name not found on page: CSV={csv_name_raw}"
+
+    if csv_postcode not in page_text_postcode_normalized:
+        return False, f"Postcode not found on page: CSV={csv_postcode_raw}"
+
+    return True, "Matched"
+
+
+def add_tracking_column_from_labels(
+    df: pd.DataFrame,
+    pdf_file,
+    progress_bar=None,
+    status_text=None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = df.copy()
+    validate_tracking_input_columns(df)
+
+    pdf_file.seek(0)
+    labels = extract_label_pages(pdf_file)
+
+    if len(df) != len(labels):
+        raise ValueError(
+            f"Row count mismatch: input file has {len(df)} rows but labels PDF has {len(labels)} pages"
+        )
+
+    tracking_values = []
+    audit_rows = []
+    total_rows = len(df)
+
+    for idx, (_, row) in enumerate(df.iterrows()):
+        label = labels[idx]
+        ok, reason = verify_row_matches_label(row, label)
+
+        if not ok:
+            if progress_bar is not None:
+                progress_bar.progress((idx + 1) / total_rows)
+            if status_text is not None:
+                status_text.error(
+                    f"Stopped at row {idx + 1} / {total_rows} (page {label['page']})"
+                )
+            raise ValueError(
+                f"Verification failed on row {idx + 1} / page {label['page']}: {reason}"
+            )
+
+        tracking_values.append(label["tracking"])
+        audit_rows.append(
+            {
+                "row_number": idx + 1,
+                "page": label["page"],
+                "csv_name": row.get("Name", ""),
+                "csv_postcode": row.get("Postcode", ""),
+                "tracking": label["tracking"],
+                "status": reason,
+            }
+        )
+
+        if progress_bar is not None:
+            progress_bar.progress((idx + 1) / total_rows)
+
+        if status_text is not None:
+            status_text.info(f"Verifying row {idx + 1} of {total_rows}...")
+
+    out = df.copy()
+    out["Tracking"] = tracking_values
+
+    if status_text is not None:
+        status_text.success(f"Verified {total_rows} rows successfully.")
+
+    audit_df = pd.DataFrame(audit_rows)
+    return out, audit_df
+
+
+# ---------- Streamlit pages ----------
+def render_formatting_page():
+    st.caption("Upload your orders export and generate a Click & Drop ready file.")
+
+    st.subheader("Upload File")
+    st.caption("Upload the orders file you want to format for Royal Mail Click & Drop.")
+
+    with st.container(border=True):
+        st.markdown("### 📄 Orders File")
+        st.caption("CSV / Excel file exported from your store or workflow.")
+        uploaded_file = st.file_uploader(
+            "Drop your orders file here (.csv / .xlsx / .xls)",
+            type=["csv", "xlsx", "xls"],
+            key="formatting_uploader",
+            label_visibility="collapsed",
+        )
+
+        if uploaded_file is not None:
+            st.success(f"Loaded: {uploaded_file.name}")
+        else:
+            st.info("Waiting for CSV / Excel file")
 
     if uploaded_file is None:
         return
@@ -397,7 +577,10 @@ def main():
     file_name = uploaded_file.name
     file_type = get_file_type(file_name)
 
-    if "last_uploaded_name" not in st.session_state or st.session_state["last_uploaded_name"] != file_name:
+    if (
+        "last_uploaded_name_formatting" not in st.session_state
+        or st.session_state["last_uploaded_name_formatting"] != file_name
+    ):
         log_event(
             "file_uploaded",
             file_name=file_name,
@@ -406,7 +589,7 @@ def main():
             app_name=APP_NAME,
             app_version=APP_VERSION,
         )
-        st.session_state["last_uploaded_name"] = file_name
+        st.session_state["last_uploaded_name_formatting"] = file_name
 
     try:
         df_in = load_input_file(uploaded_file)
@@ -430,7 +613,8 @@ def main():
         .reindex(["LBT", "Parcel", "Track24", "TrackParcel"], fill_value=0)
     )
 
-    if "last_success_logged_for" not in st.session_state or st.session_state["last_success_logged_for"] != file_name:
+    success_key = f"formatting_success::{file_name}"
+    if st.session_state.get("last_success_logged_for") != success_key:
         log_event(
             "process_success",
             file_name=file_name,
@@ -446,23 +630,27 @@ def main():
             app_name=APP_NAME,
             app_version=APP_VERSION,
         )
-        st.session_state["last_success_logged_for"] = file_name
+        st.session_state["last_success_logged_for"] = success_key
 
-    st.success("File processed successfully.")
+    st.subheader("Summary")
 
-    c0, c1, c2, c3, c4, c5 = st.columns(6)
+    c0, c1, c2 = st.columns(3)
     c0.metric("Orders", stats["total_orders"])
     c1.metric("Products", stats["total_products"])
     c2.metric("LBT", int(category_counts["LBT"]))
+
+    c3, c4, c5 = st.columns(3)
     c3.metric("Parcel", int(category_counts["Parcel"]))
     c4.metric("Track24", int(category_counts["Track24"]))
     c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
+
+    st.success("File processed successfully.")
 
     csv_bytes = df_out.to_csv(index=False).encode("utf-8")
     excel_bytes = to_excel_autofit(df_out)
     csv_name, xlsx_name = build_output_filenames()
 
-    st.subheader("Download")
+    st.subheader("Download Result")
     col1, col2 = st.columns(2)
 
     with col1:
@@ -471,6 +659,8 @@ def main():
             data=csv_bytes,
             file_name=csv_name,
             mime="text/csv",
+            key="download_formatting_csv",
+            use_container_width=True,
         )
         if csv_clicked:
             log_event(
@@ -495,6 +685,8 @@ def main():
             data=excel_bytes,
             file_name=xlsx_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_formatting_xlsx",
+            use_container_width=True,
         )
         if xlsx_clicked:
             log_event(
@@ -513,8 +705,190 @@ def main():
                 app_version=APP_VERSION,
             )
 
-    st.subheader("Preview")
-    st.dataframe(preview_df.head(20), width="stretch")
+    with st.expander("Preview formatted rows", expanded=False):
+        st.dataframe(preview_df.head(20), width="stretch")
+
+
+def render_add_tracking_page():
+    st.caption("Upload the original file plus the Royal Mail labels PDF to add a Tracking column.")
+    st.caption("Verification checks that each row's Name and Postcode are found on the corresponding label page before adding Tracking.")
+
+    st.subheader("Upload Files")
+    st.caption("Upload both files below to match each order row with its label page.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        with st.container(border=True):
+            st.markdown("### 📄 CSV / Excel")
+            st.caption("CSV / Excel file that will receive the Tracking column.")
+            input_file = st.file_uploader(
+                "Upload orders file",
+                type=["csv", "xlsx", "xls"],
+                key="tracking_input_file",
+                label_visibility="collapsed",
+            )
+
+            if input_file is not None:
+                st.success(f"Loaded: {input_file.name}")
+            else:
+                st.info("Waiting for CSV / Excel file")
+
+    with col2:
+        with st.container(border=True):
+            st.markdown("### 📦 PDF Labels")
+            st.caption("PDF containing one label per page in the same order.")
+            labels_pdf = st.file_uploader(
+                "Upload labels PDF",
+                type=["pdf"],
+                key="tracking_labels_pdf",
+                label_visibility="collapsed",
+            )
+
+            if labels_pdf is not None:
+                st.success(f"Loaded: {labels_pdf.name}")
+            else:
+                st.info("Waiting for labels PDF")
+
+    if input_file is None or labels_pdf is None:
+        return
+
+    input_name = input_file.name
+    input_type = get_file_type(input_name)
+
+    if (
+        "last_uploaded_name_tracking" not in st.session_state
+        or st.session_state["last_uploaded_name_tracking"] != f"{input_name}|{labels_pdf.name}"
+    ):
+        log_event(
+            "tracking_files_uploaded",
+            file_name=input_name,
+            file_type=input_type,
+            success=True,
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
+        )
+        st.session_state["last_uploaded_name_tracking"] = f"{input_name}|{labels_pdf.name}"
+
+    try:
+        df_in = load_input_file(input_file)
+
+        labels_pdf.seek(0)
+        labels = extract_label_pages(labels_pdf)
+
+        st.subheader("Quick Check")
+        m1, m2 = st.columns(2)
+        m1.metric("Order rows", len(df_in))
+        m2.metric("Label pages", len(labels))
+
+        if len(df_in) != len(labels):
+            st.error(
+                f"Row count mismatch: input file has {len(df_in)} rows but labels PDF has {len(labels)} pages"
+            )
+            return
+
+        st.subheader("Run")
+        run_clicked = st.button(
+            "Add Tracking",
+            type="primary",
+            key="run_add_tracking",
+            use_container_width=True,
+        )
+
+        if run_clicked:
+            progress_placeholder = st.empty()
+            status_placeholder = st.empty()
+
+            progress_bar = progress_placeholder.progress(0)
+            status_text = status_placeholder.empty()
+
+            labels_pdf.seek(0)
+            df_out, audit_df = add_tracking_column_from_labels(
+                df_in,
+                labels_pdf,
+                progress_bar=progress_bar,
+                status_text=status_text,
+            )
+
+            progress_placeholder.empty()
+            status_placeholder.empty()
+
+            data_bytes, out_name, mime = dataframe_to_download_bytes(df_out, input_file.name)
+
+            success_key = f"tracking_success::{input_name}::{labels_pdf.name}"
+            if st.session_state.get("last_success_logged_for_tracking") != success_key:
+                log_event(
+                    "tracking_process_success",
+                    file_name=input_name,
+                    file_type=input_type,
+                    input_rows=len(df_in),
+                    success=True,
+                    app_name=APP_NAME,
+                    app_version=APP_VERSION,
+                )
+                st.session_state["last_success_logged_for_tracking"] = success_key
+
+            st.success(f"Tracking added successfully to {len(df_out)} rows.")
+
+            st.subheader("Download Result")
+            download_clicked = st.download_button(
+                label="⬇️ Download file with Tracking",
+                data=data_bytes,
+                file_name=out_name,
+                mime=mime,
+                key="download_tracking_output",
+                use_container_width=True,
+            )
+
+            if download_clicked:
+                log_event(
+                    "download_tracking_output",
+                    file_name=input_name,
+                    file_type=input_type,
+                    input_rows=len(df_in),
+                    success=True,
+                    app_name=APP_NAME,
+                    app_version=APP_VERSION,
+                )
+
+            with st.expander("Preview verified rows", expanded=False):
+                st.dataframe(audit_df.head(20), width="stretch")
+
+    except Exception as e:
+        log_event(
+            "tracking_process_failed",
+            file_name=input_name,
+            file_type=input_type,
+            success=False,
+            error_message=str(e),
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
+        )
+        st.error(str(e))
+        return
+    
+# ---------- Streamlit UI ----------
+def main():
+    st.title(APP_NAME)
+
+    if st.secrets.get("SHOW_ADMIN_METRICS", False):
+        render_admin_metrics()
+
+    get_session_id()
+    if "app_open_logged" not in st.session_state:
+        log_event("app_open", success=True, app_name=APP_NAME, app_version=APP_VERSION)
+        st.session_state["app_open_logged"] = True
+
+    mode = st.radio(
+        "Workflow",
+        ["Formatting", "Add Tracking"],
+        horizontal=True,
+    )
+
+    if mode == "Formatting":
+        render_formatting_page()
+    else:
+        render_add_tracking_page()
 
 
 if __name__ == "__main__":
