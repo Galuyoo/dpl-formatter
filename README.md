@@ -1,17 +1,72 @@
 ![CI](https://github.com/Galuyoo/dpl-formatter/actions/workflows/ci.yml/badge.svg)
-# DPL Formatter
+\# DPL Formatter
 
 **DPL Formatter** is a lightweight automation tool designed to convert
 warehouse order exports into **Royal Mail Click & Drop compatible
-shipment files**.
+shipment files**, and to automatically merge **tracking numbers back
+into the original orders** after labels are generated.
 
 The system removes repetitive manual formatting work in shipping
-workflows by automatically classifying shipment types and producing a
-clean CSV file ready for Click & Drop import.
+workflows by automatically classifying shipment types, generating a
+Click & Drop import file, and later attaching tracking numbers to the
+same orders dataset.
 
 This project is part of a broader portfolio focused on **automation,
 operational tooling, and infrastructure systems that improve reliability
 in e‑commerce logistics environments**.
+
+------------------------------------------------------------------------
+
+# Complete Workflow
+
+DPL Formatter supports the **full operational shipping workflow** used
+in warehouse environments.
+
+The process consists of two steps.
+
+## 1. Formatting Orders for Click & Drop
+
+Users upload a standard order export file.
+
+The application:
+
+-   validates the file
+-   classifies shipment types
+-   formats the dataset for Royal Mail Click & Drop
+-   generates a clean CSV ready for label generation
+
+This file can then be uploaded directly into **Royal Mail Click & Drop**
+to generate shipping labels.
+
+------------------------------------------------------------------------
+
+## 2. Merging Tracking Codes Back Into Orders
+
+After labels are generated, Click & Drop produces a **labels PDF** where
+each page contains a shipping label and tracking number.
+
+DPL Formatter allows users to:
+
+1.  upload the original orders file
+2.  upload the labels PDF
+3.  automatically extract tracking numbers
+4.  verify each order against its corresponding label page
+5.  generate a new file containing a **Tracking column**
+
+Verification ensures that each order row matches the correct label page
+by checking:
+
+-   recipient name
+-   postcode
+
+This guarantees that tracking numbers are applied to the correct
+customers.
+
+The resulting file can then be used to:
+
+-   send tracking notifications to customers
+-   upload tracking numbers to stores or marketplaces
+-   maintain shipment records
 
 ------------------------------------------------------------------------
 
@@ -32,39 +87,43 @@ transformation pipeline**.
 
 Users can:
 
-1.  Upload a standard order export file\
-2.  Automatically classify shipment type\
-3.  Preview processed results\
+1.  Upload a standard order export file
+2.  Automatically classify shipment type
+3.  Preview processed results
 4.  Download a Click & Drop compatible CSV
 
-This removes repetitive operational work and ensures consistent output
-formatting.
+------------------------------------------------------------------------
 
-## Operational Impact
+# Tracking Code Extraction
 
-Before automation, warehouse staff had to manually prepare Royal Mail Click & Drop imports by processing orders individually. This involved reviewing each order, determining the correct shipment type, and formatting the data manually.
+The system can extract Royal Mail tracking numbers directly from label
+PDFs.
 
-DPL Formatter automates this process by applying deterministic classification rules and generating a Click & Drop compatible file instantly.
+Each label page contains a tracking barcode and associated tracking
+number.
 
-The impact of this automation includes:
+Example:
 
-- transforming a manual task that could take hours into a process completed in seconds
-- eliminating repetitive formatting work
-- reducing human error in shipment classification
-- enabling fast processing of large order batches during peak periods
+YT 1644 3183 1GB\
+QM 8440 4148 7GB
 
-This is particularly valuable during high-volume seasons such as Christmas, where order throughput increases significantly.
+During processing the system:
 
-The warehouse processes orders from multiple drop-shippers whose stores cannot be directly connected to the Click & Drop account. DPL Formatter bridges this gap by converting exported order data into a format immediately compatible with Royal Mail's shipping system.
+1.  reads the labels PDF
+2.  extracts the tracking number from each page
+3.  matches the page to the corresponding order row
+4.  verifies name and postcode
+5.  appends the tracking number to the dataset
 
-## Application Interface
+Output column:
 
-![DPL Formatter Interface](docs/interface.png)
+-   Tracking
+
 ------------------------------------------------------------------------
 
 # Architecture
 
-The application follows a simple but robust **three-layer processing
+The application follows a simple **three‑layer processing
 architecture**.
 
 ## Input Layer
@@ -86,7 +145,7 @@ This prevents malformed files from entering the processing pipeline.
 
 ## Processing Layer
 
-The core processing engine applies **rule-based classification and
+The core processing engine applies **rule‑based classification and
 transformation**.
 
 Key operations include:
@@ -111,131 +170,10 @@ Outputs include:
 -   Click & Drop compatible CSV
 -   Excel export for verification
 -   summary processing metrics
+-   orders file with merged **Tracking column**
 
 Each input row produces **exactly one output row**, ensuring a clear
 transformation pipeline.
-
-------------------------------------------------------------------------
-
-# Shipping Classification
-
-Orders are automatically classified into one of four shipment types.
-
-| Type | Description |
-|------|-------------|
-| **LBT** | Letterbox-sized tracked shipment (48h delivery) |
-| **Parcel** | Standard tracked parcel (48h delivery) |
-| **Track24** | Small tracked shipment (24h delivery) |
-| **TrackParcel** | Tracked parcel (24h delivery) |
-
-Classification is determined by:
-
--   product type
--   size rules
--   tracking indicators
-
-------------------------------------------------------------------------
-
-# Multi‑Product Detection
-
-Orders containing multiple products are detected automatically.
-
-Example product field:
-
-    TSHIRT-ABC-M-X1
-    TSHIRT-ABC-M-X1, TSHIRT-DEF-L-X1
-
-Product count is determined using:
-
-    product_count = commas + 1
-
-This ensures accurate classification of multi-item orders.
-
-------------------------------------------------------------------------
-
-# Tracking Detection
-
-Tracking markers are detected from auxiliary columns within the row.
-
-Supported tracking keywords include:
-
--   tracked
--   tracked 24
--   track24
--   track 24
-
-This reflects how warehouse exports embed shipping indicators in the
-dataset.
-
-------------------------------------------------------------------------
-
-# Click & Drop Compatible Output
-
-The generated CSV contains the columns required by Royal Mail Click &
-Drop:
-
--   order reference
--   Name
--   Address 1
--   Address 2
--   City
--   Postcode
--   Product Name
-
-Order references are automatically suffixed with the shipment type.
-
-Example:
-
-    12345.Track24
-    12346.LBT
-    12347.Parcel
-
-This allows direct import into Click & Drop without modification.
-
-------------------------------------------------------------------------
-
-# Operational Telemetry
-
-The application includes an **internal event logging system** used to
-monitor usage and processing activity.
-
-Logged events include:
-
--   application sessions
--   file uploads
--   successful processing runs
--   download events
--   processing failures
-
-Telemetry is stored in a **Google Sheets datastore**, providing a
-lightweight operational monitoring system without requiring a database.
-
-Metrics collected include:
-
--   total processing runs
--   orders processed
--   product counts
--   shipment type distribution
--   download activity
-
-------------------------------------------------------------------------
-
-# Admin Metrics Dashboard
-
-A local development dashboard provides operational insights.
-
-Metrics displayed include:
-
--   number of processing runs
--   total orders processed
--   total products processed
--   number of downloads
--   session count
-
-The dashboard also displays recent event logs and charts of processing
-activity.
-
-The admin dashboard is **hidden in production deployments**.
 
 ------------------------------------------------------------------------
 
@@ -245,37 +183,23 @@ The application is deployed using **Streamlit**.
 
 Local development:
 
-    streamlit run app.py
+streamlit run app.py
 
-Production deployment is handled through Streamlit Cloud, allowing users
-to upload files directly through the web interface.
+Production deployment can be handled through Streamlit Cloud or other
+hosting platforms, allowing users to upload files directly through the
+web interface.
 
 ------------------------------------------------------------------------
 
 # Repository Structure
 
-    dpl-formatter
-    ├── app.py
-    ├── utils/
-    │   └── metrics_logger.py
-    ├── requirements.txt
-    ├── README.md
-    └── .gitignore
-
-------------------------------------------------------------------------
-
-# Design Principles
-
-The system was designed with the same principles used in larger
-automation systems:
-
--   deterministic processing
--   operational reliability
--   minimal user friction
--   predictable outputs
-
-Even small operational tools can remove significant manual workload when
-designed with clear rule-based logic.
+dpl-formatter\
+├── app.py\
+├── utils/\
+│ └── metrics_logger.py\
+├── requirements.txt\
+├── README.md\
+└── .gitignore
 
 ------------------------------------------------------------------------
 
@@ -285,6 +209,7 @@ Possible future developments include:
 
 -   direct Click & Drop API integration
 -   automated order ingestion pipelines
+-   automated tracking updates to e‑commerce platforms
 -   expanded shipping rule configuration
 -   integration with warehouse management systems
 
