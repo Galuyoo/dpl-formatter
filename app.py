@@ -110,17 +110,17 @@ def render_admin_metrics() -> None:
 # ---------- Config ----------
 REQUIRED_INPUT_COLUMNS = [
     "order reference",
-    "Product",
-    "Name",
-    "Address 1",
-    "Address 2",
-    "City",
-    "Postcode",
+    "product",
+    "name",
+    "address 1",
+    "address 2",
+    "city",
+    "postcode",
 ]
 
 TRACKING_REQUIRED_COLUMNS = [
-    "Name",
-    "Postcode",
+    "name",
+    "postcode",
 ]
 
 TRACKED_KEYWORDS = [
@@ -161,6 +161,10 @@ def normalize_text(value) -> str:
     txt = re.sub(r"\s+", " ", txt)
     return txt
 
+def normalize_column_name(col_name) -> str:
+    if pd.isna(col_name):
+        return ""
+    return str(col_name).strip().lower()
 
 def normalize_compare_text(value) -> str:
     if pd.isna(value):
@@ -253,7 +257,7 @@ def is_lbt_product(product: str) -> bool:
 
 
 def classify_row(row: pd.Series) -> str:
-    product = row.get("Product", "")
+    product = row.get("product", "")
     is_tracked = get_row_tracked_flag(row)
     is_lbt = is_lbt_product(product)
 
@@ -318,35 +322,44 @@ def transform_orders(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict
 
     df["__Tracked"] = df.apply(get_row_tracked_flag, axis=1)
     df["__Category"] = df.apply(classify_row, axis=1)
-    df["__ProductQty"] = df["Product"].apply(extract_product_quantity)
+    df["__ProductQty"] = df["product"].apply(extract_product_quantity)
 
     df["order reference"] = df["order reference"].astype(str).str.strip() + "." + df["__Category"]
 
-    df["Product Name"] = df["Product"].astype(str).apply(lambda x: wrap_product_name(x, 35))
+    df["Product Name"] = df["product"].astype(str).apply(lambda x: wrap_product_name(x, 35))
 
     display_cols = [
         "order reference",
         "__Category",
         "__Tracked",
         "__ProductQty",
-        "Name",
-        "City",
-        "Postcode",
+        "name",
+        "city",
+        "postcode",
         "Product Name",
     ]
 
     output_cols = [
         "order reference",
-        "Name",
-        "Address 1",
-        "Address 2",
-        "City",
-        "Postcode",
+        "name",
+        "address 1",
+        "address 2",
+        "city",
+        "postcode",
         "Product Name",
     ]
 
     display_df = df[display_cols].copy()
     output_df = df[output_cols].copy()
+
+    output_df = output_df.rename(columns={
+        "order reference": "order reference",
+        "name": "Name",
+        "address 1": "Address 1",
+        "address 2": "Address 2",
+        "city": "City",
+        "postcode": "Postcode",
+    })
 
     stats = {
         "total_orders": int(len(df)),
@@ -361,12 +374,14 @@ def load_input_file(uploaded_file) -> pd.DataFrame:
     name = uploaded_file.name.lower()
 
     if name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
+        df = pd.read_csv(uploaded_file)
+    elif name.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(uploaded_file)
+    else:
+        raise ValueError("File type not supported. Use CSV or Excel (.csv, .xlsx, .xls).")
 
-    if name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(uploaded_file)
-
-    raise ValueError("File type not supported. Use CSV or Excel (.csv, .xlsx, .xls).")
+    df.columns = [normalize_column_name(col) for col in df.columns]
+    return df
 
 
 def to_excel_autofit(df: pd.DataFrame) -> bytes:
@@ -460,8 +475,8 @@ def extract_label_pages(pdf_file) -> list[dict]:
 
 # ---------- Tracking verification ----------
 def verify_row_matches_label(row: pd.Series, label_page: dict) -> tuple[bool, str]:
-    csv_name_raw = str(row.get("Name", "")).strip()
-    csv_postcode_raw = str(row.get("Postcode", "")).strip()
+    csv_name_raw = str(row.get("name", "")).strip()
+    csv_postcode_raw = str(row.get("postcode", "")).strip()
 
     csv_name = normalize_compare_text(csv_name_raw)
     csv_postcode = normalize_postcode(csv_postcode_raw)
@@ -526,8 +541,8 @@ def add_tracking_column_from_labels(
             {
                 "row_number": idx + 1,
                 "page": label["page"],
-                "csv_name": row.get("Name", ""),
-                "csv_postcode": row.get("Postcode", ""),
+                "csv_name": row.get("name", ""),
+                "csv_postcode": row.get("postcode", ""),
                 "tracking": label["tracking"],
                 "status": reason,
             }
