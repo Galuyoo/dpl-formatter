@@ -1,5 +1,7 @@
 ![CI](https://github.com/Galuyoo/dpl-formatter/actions/workflows/ci.yml/badge.svg)
-\# DPL Formatter
+
+
+# DPL Formatter
 
 **DPL Formatter** is a lightweight automation tool designed to convert
 warehouse order exports into **Royal Mail Click & Drop compatible
