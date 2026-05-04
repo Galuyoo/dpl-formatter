@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from core.email_sender import EmailAttachment, SmtpConfig, send_email_with_attachment
 from core.file_io import (
     build_output_filenames,
     dataframe_to_download_bytes,
@@ -112,6 +113,175 @@ def render_admin_metrics() -> None:
         st.dataframe(df.tail(20), width="stretch")
 
 
+
+
+
+def get_email_secret(key: str, default="") -> str:
+    try:
+        config = st.secrets.get("email", {})
+    except Exception:
+        config = {}
+
+    value = ""
+
+    if isinstance(config, dict):
+        value = config.get(key, default)
+    else:
+        value = getattr(config, key, default)
+
+    env_key = f"EMAIL_{key.upper()}"
+    return str(value or os.getenv(env_key, default)).strip()
+
+
+def get_smtp_config() -> SmtpConfig | None:
+    host = get_email_secret("smtp_host")
+    port_raw = get_email_secret("smtp_port", "587")
+    username = get_email_secret("username")
+    password = get_email_secret("password")
+    from_email = get_email_secret("from_email") or username
+    use_tls_raw = get_email_secret("use_tls", "true").lower()
+
+    if not host or not from_email:
+        return None
+
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 587
+
+    return SmtpConfig(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        from_email=from_email,
+        use_tls=use_tls_raw not in {"false", "0", "no"},
+    )
+
+
+def render_email_results_section(
+    *,
+    tracking_csv_bytes: bytes,
+    tracking_csv_name: str,
+    labels_pdf_bytes: bytes | None,
+    labels_pdf_name: str,
+) -> None:
+    st.markdown("### Email results")
+    st.caption("Optional: send the tracking CSV and labels PDF as two separate emails.")
+
+    smtp_config = get_smtp_config()
+
+    if smtp_config is None:
+        with st.expander("Email setup required", expanded=False):
+            st.info(
+                "To enable email sending, add SMTP settings to `.streamlit/secrets.toml` "
+                "or set EMAIL_* environment variables locally."
+            )
+            st.code(
+                "[email]\n"
+                "smtp_host = \"smtp.example.com\"\n"
+                "smtp_port = 587\n"
+                "username = \"your_email@example.com\"\n"
+                "password = \"your_app_password\"\n"
+                "from_email = \"your_email@example.com\"\n"
+                "use_tls = true",
+                language="toml",
+            )
+        return
+
+    tracking_email_options = {
+        "Lot X": "info@inkstitch.co.uk",
+        "DPL lot": "teefusion786@gmail.com",
+    }
+
+    tracking_lot = st.selectbox(
+        "Tracking CSV recipient",
+        list(tracking_email_options.keys()),
+        key="email_tracking_csv_lot",
+    )
+    tracking_to = tracking_email_options[tracking_lot]
+
+    labels_to = "operationsinkstitch@gmail.com"
+
+    st.info(f"Tracking CSV will be sent to: {tracking_to}")
+    st.info(f"Labels PDF will be sent to: {labels_to}")
+
+    default_subject_stamp = datetime.now().strftime("%Y-%m-%d")
+
+    tracking_subject = st.text_input(
+        "Tracking CSV email subject",
+        value=f"Tracking CSV - {tracking_lot} - {default_subject_stamp}",
+        key="email_tracking_csv_subject",
+    )
+
+    labels_subject = st.text_input(
+        "Labels PDF email subject",
+        value=f"Royal Mail Labels PDF - {default_subject_stamp}",
+        key="email_labels_pdf_subject",
+    )
+
+    tracking_body = st.text_area(
+        "Tracking CSV email body",
+        value="Please find the tracking CSV attached.\n\nThanks",
+        key="email_tracking_csv_body",
+    )
+
+    labels_body = st.text_area(
+        "Labels PDF email body",
+        value="Please find the Royal Mail labels PDF attached.\n\nThanks",
+        key="email_labels_pdf_body",
+    )
+
+    if labels_pdf_bytes is None:
+        st.warning("Labels PDF is not available in memory. Upload the labels PDF again before sending emails.")
+        return
+
+    if st.button(
+        "Send separate emails",
+        type="primary",
+        key="send_fulfilment_result_emails",
+        use_container_width=True,
+    ):
+        if not tracking_to and not labels_to:
+            st.error("Enter at least one recipient email.")
+            return
+
+        sent = []
+
+        try:
+            if tracking_to:
+                send_email_with_attachment(
+                    smtp_config=smtp_config,
+                    to_email=tracking_to,
+                    subject=tracking_subject,
+                    body=tracking_body,
+                    attachment=EmailAttachment(
+                        filename=tracking_csv_name,
+                        content=tracking_csv_bytes,
+                        mime_type="text/csv",
+                    ),
+                )
+                sent.append("tracking CSV")
+
+            if labels_to:
+                send_email_with_attachment(
+                    smtp_config=smtp_config,
+                    to_email=labels_to,
+                    subject=labels_subject,
+                    body=labels_body,
+                    attachment=EmailAttachment(
+                        filename=labels_pdf_name or "labels.pdf",
+                        content=labels_pdf_bytes,
+                        mime_type="application/pdf",
+                    ),
+                )
+                sent.append("labels PDF")
+
+        except Exception as e:
+            st.error(f"Email sending failed: {e}")
+            return
+
+        st.success("Sent: " + ", ".join(sent))
 
 # ---------- Streamlit pages ----------
 
@@ -398,6 +568,13 @@ def render_full_fulfilment_workflow():
             key="download_fulfilment_tracking_xlsx",
             use_container_width=True,
         )
+
+    render_email_results_section(
+        tracking_csv_bytes=tracking_csv_bytes,
+        tracking_csv_name=tracking_csv_name,
+        labels_pdf_bytes=st.session_state.get("fulfilment_labels_pdf_bytes"),
+        labels_pdf_name=st.session_state.get("fulfilment_labels_pdf_name", "labels.pdf"),
+    )
 
     if audit_df is not None:
         with st.expander("Preview verified tracking rows", expanded=False):
