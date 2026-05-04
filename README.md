@@ -203,6 +203,16 @@ dpl-formatter\
 
 ------------------------------------------------------------------------
 
+# Local Development
+
+Install dependencies:
+
+```powershell
+pip install -r requirements.txt
+
+
+------------------------------------------------------------------------
+
 # Future Improvements
 
 Possible future developments include:
