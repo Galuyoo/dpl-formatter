@@ -5,3 +5,4 @@ gspread
 google-auth
 pdfplumber
 pytest
+requests

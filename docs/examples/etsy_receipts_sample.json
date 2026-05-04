@@ -1,0 +1,41 @@
+﻿{
+  "results": [
+    {
+      "receipt_id": 123456789,
+      "name": "Jane Smith",
+      "first_line": "1 High Street",
+      "second_line": "Flat 2",
+      "city": "London",
+      "zip": "SW1A 1AA",
+      "country_iso": "GB",
+      "was_paid": true,
+      "was_shipped": false,
+      "transactions": [
+        {
+          "title": "Black T-Shirt",
+          "quantity": 1,
+          "variations": [
+            {
+              "formatted_name": "Size",
+              "formatted_value": "M"
+            },
+            {
+              "formatted_name": "Colour",
+              "formatted_value": "Black"
+            }
+          ]
+        },
+        {
+          "title": "Hoodie",
+          "quantity": 2,
+          "variations": [
+            {
+              "formatted_name": "Size",
+              "formatted_value": "L"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

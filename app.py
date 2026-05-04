@@ -1,8 +1,17 @@
+import json
 import os
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
+from core.marketplaces.etsy import (
+    EtsyApiError,
+    extract_receipts_from_payload,
+    fetch_etsy_receipts,
+    flatten_etsy_receipts_for_review,
+    normalize_etsy_receipts_to_orders_df,
+)
 from core.file_io import (
     build_output_filenames,
     dataframe_to_download_bytes,
@@ -430,6 +439,157 @@ def render_add_tracking_page():
         st.error(str(e))
         return
     
+
+
+def get_etsy_secret(key: str) -> str:
+    try:
+        config = st.secrets.get("etsy", {})
+    except Exception:
+        config = {}
+
+    value = ""
+
+    if isinstance(config, dict):
+        value = config.get(key, "")
+    else:
+        value = getattr(config, key, "")
+
+    env_key = f"ETSY_{key.upper()}"
+    return str(value or os.getenv(env_key, "")).strip()
+
+
+def render_etsy_csv_export_page():
+    st.caption("Experimental Etsy order fetcher. First goal: create downloadable CSVs for review before connecting this to the main formatter.")
+
+    st.warning(
+        "Experimental workflow: use this to compare Etsy API output against your normal daily order export before trusting it operationally."
+    )
+
+    source = st.radio(
+        "Source",
+        ["Sample JSON upload", "Etsy API"],
+        horizontal=True,
+        key="etsy_export_source",
+    )
+
+    if "etsy_receipts" not in st.session_state:
+        st.session_state["etsy_receipts"] = None
+
+    if source == "Sample JSON upload":
+        sample_file = st.file_uploader(
+            "Upload Etsy receipts JSON",
+            type=["json"],
+            key="etsy_receipts_sample_json",
+        )
+
+        if st.button("Build CSV from sample JSON", type="primary", use_container_width=True):
+            if sample_file is None:
+                st.error("Upload a sample Etsy receipts JSON file first.")
+                return
+
+            try:
+                payload = json.load(sample_file)
+                st.session_state["etsy_receipts"] = extract_receipts_from_payload(payload)
+            except Exception as e:
+                st.error(f"Could not parse sample JSON: {e}")
+                return
+
+    else:
+        st.info(
+            "API mode expects Etsy credentials in Streamlit secrets or environment variables: "
+            "ETSY_API_KEY, ETSY_ACCESS_TOKEN, ETSY_SHOP_ID."
+        )
+
+        limit = st.number_input("Orders per API page", min_value=1, max_value=100, value=50, step=1)
+        max_pages = st.number_input("Maximum pages to fetch", min_value=1, max_value=20, value=5, step=1)
+        only_unshipped = st.checkbox("Only unshipped paid orders", value=True)
+
+        if st.button("Fetch Etsy orders", type="primary", use_container_width=True):
+            api_key = get_etsy_secret("api_key")
+            access_token = get_etsy_secret("access_token")
+            shop_id = get_etsy_secret("shop_id")
+
+            missing = []
+            if not api_key:
+                missing.append("ETSY_API_KEY")
+            if not access_token:
+                missing.append("ETSY_ACCESS_TOKEN")
+            if not shop_id:
+                missing.append("ETSY_SHOP_ID")
+
+            if missing:
+                st.error("Missing Etsy credentials: " + ", ".join(missing))
+                return
+
+            try:
+                with st.spinner("Fetching Etsy orders..."):
+                    st.session_state["etsy_receipts"] = fetch_etsy_receipts(
+                        api_key=api_key,
+                        access_token=access_token,
+                        shop_id=shop_id,
+                        limit=int(limit),
+                        max_pages=int(max_pages),
+                        was_paid=True if only_unshipped else None,
+                        was_shipped=False if only_unshipped else None,
+                    )
+            except EtsyApiError as e:
+                st.error(str(e))
+                return
+            except Exception as e:
+                st.error(f"Could not fetch Etsy orders: {e}")
+                return
+
+    receipts = st.session_state.get("etsy_receipts")
+
+    if receipts is None:
+        st.info("No Etsy orders loaded yet.")
+        return
+
+    raw_df = flatten_etsy_receipts_for_review(receipts)
+    dpl_df = normalize_etsy_receipts_to_orders_df(receipts)
+
+    st.subheader("Etsy CSV Export Preview")
+
+    c1, c2 = st.columns(2)
+    c1.metric("Receipts", len(receipts))
+    c2.metric("DPL rows", len(dpl_df))
+
+    if dpl_df.empty:
+        st.warning("No Etsy orders found.")
+        return
+
+    st.markdown("### DPL input CSV preview")
+    st.dataframe(dpl_df.head(50), width="stretch")
+
+    with st.expander("Raw Etsy review preview", expanded=False):
+        st.dataframe(raw_df.head(50), width="stretch")
+
+    stamp = datetime.now().strftime("%Y-%m-%d")
+
+    st.subheader("Download CSVs")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.download_button(
+            label="Download Etsy review CSV",
+            data=raw_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"etsy_raw_orders_{stamp}.csv",
+            mime="text/csv",
+            key="download_etsy_raw_orders",
+            use_container_width=True,
+        )
+
+    with col2:
+        st.download_button(
+            label="Download DPL input CSV",
+            data=dpl_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"etsy_dpl_input_{stamp}.csv",
+            mime="text/csv",
+            key="download_etsy_dpl_input",
+            use_container_width=True,
+        )
+
 # ---------- Streamlit UI ----------
 def main():
     st.title(APP_NAME)
@@ -444,14 +604,16 @@ def main():
 
     mode = st.radio(
         "Workflow",
-        ["Formatting", "Add Tracking"],
+        ["Formatting", "Add Tracking", "Etsy CSV Export (Experimental)"],
         horizontal=True,
     )
 
     if mode == "Formatting":
         render_formatting_page()
-    else:
+    elif mode == "Add Tracking":
         render_add_tracking_page()
+    else:
+        render_etsy_csv_export_page()
 
 
 if __name__ == "__main__":
