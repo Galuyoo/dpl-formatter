@@ -1,11 +1,49 @@
+# Python
 venv/
+.venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# OS / editor
 .DS_Store
-.env
-.streamlit/
+Thumbs.db
 .history/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
 .streamlit/secrets.toml
-*.json
+secrets.toml
+*service-account*.json
+*credentials*.json
+*.local.json
+
+# Private/generated operational files
+*.csv
+*.xls
+*.xlsx
 *.pdf
+exports/
+output/
+outputs/
+uploads/
+downloads/
+private_data/
+local_data/
+tmp/
+temp/
+
+# Allow future committed fixtures/examples when needed
+!tests/fixtures/
+!tests/fixtures/**
+!docs/examples/
+!docs/examples/**
+
+# Local scratch files
 test.py
