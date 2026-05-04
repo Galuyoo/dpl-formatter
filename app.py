@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -113,6 +114,296 @@ def render_admin_metrics() -> None:
 
 
 # ---------- Streamlit pages ----------
+
+def render_full_fulfilment_workflow():
+    st.caption(
+        "One-page workflow: upload orders, generate Click & Drop CSV, then return here with the labels PDF to add tracking."
+    )
+
+    if "fulfilment_input_name" not in st.session_state:
+        st.session_state["fulfilment_input_name"] = ""
+    if "fulfilment_input_type" not in st.session_state:
+        st.session_state["fulfilment_input_type"] = ""
+    if "fulfilment_df_in" not in st.session_state:
+        st.session_state["fulfilment_df_in"] = None
+    if "fulfilment_preview_df" not in st.session_state:
+        st.session_state["fulfilment_preview_df"] = None
+    if "fulfilment_df_out" not in st.session_state:
+        st.session_state["fulfilment_df_out"] = None
+    if "fulfilment_stats" not in st.session_state:
+        st.session_state["fulfilment_stats"] = None
+    if "fulfilment_tracking_df" not in st.session_state:
+        st.session_state["fulfilment_tracking_df"] = None
+    if "fulfilment_audit_df" not in st.session_state:
+        st.session_state["fulfilment_audit_df"] = None
+    if "fulfilment_labels_pdf_name" not in st.session_state:
+        st.session_state["fulfilment_labels_pdf_name"] = ""
+    if "fulfilment_labels_pdf_bytes" not in st.session_state:
+        st.session_state["fulfilment_labels_pdf_bytes"] = None
+
+    st.subheader("Step 1 — Upload orders and generate Click & Drop file")
+
+    with st.container(border=True):
+        st.markdown("### 📄 Orders File")
+        st.caption("Upload the original CSV / Excel orders file once. The app will remember it for the tracking step.")
+        uploaded_file = st.file_uploader(
+            "Drop your orders file here (.csv / .xlsx / .xls)",
+            type=["csv", "xlsx", "xls"],
+            key="fulfilment_orders_file",
+            label_visibility="collapsed",
+        )
+
+        if uploaded_file is not None:
+            st.success(f"Loaded: {uploaded_file.name}")
+        elif st.session_state["fulfilment_df_in"] is not None:
+            st.info(f"Using remembered file: {st.session_state['fulfilment_input_name']}")
+        else:
+            st.info("Waiting for CSV / Excel file")
+
+    if uploaded_file is not None:
+        file_name = uploaded_file.name
+        file_type = get_file_type(file_name)
+
+        should_process = (
+            st.session_state["fulfilment_df_in"] is None
+            or st.session_state["fulfilment_input_name"] != file_name
+        )
+
+        if should_process:
+            try:
+                df_in = load_input_file(uploaded_file)
+                preview_df, df_out, stats = transform_orders(df_in)
+
+                st.session_state["fulfilment_input_name"] = file_name
+                st.session_state["fulfilment_input_type"] = file_type
+                st.session_state["fulfilment_df_in"] = df_in
+                st.session_state["fulfilment_preview_df"] = preview_df
+                st.session_state["fulfilment_df_out"] = df_out
+                st.session_state["fulfilment_stats"] = stats
+
+                # Reset tracking result when a new orders file is uploaded.
+                st.session_state["fulfilment_tracking_df"] = None
+                st.session_state["fulfilment_audit_df"] = None
+                st.session_state["fulfilment_labels_pdf_name"] = ""
+                st.session_state["fulfilment_labels_pdf_bytes"] = None
+
+                log_event(
+                    "fulfilment_file_processed",
+                    file_name=file_name,
+                    file_type=file_type,
+                    input_rows=len(df_in),
+                    total_orders=stats["total_orders"],
+                    total_products=stats["total_products"],
+                    success=True,
+                    app_name=APP_NAME,
+                    app_version=APP_VERSION,
+                )
+
+            except Exception as e:
+                log_event(
+                    "fulfilment_process_failed",
+                    file_name=file_name,
+                    file_type=file_type,
+                    success=False,
+                    error_message=str(e),
+                    app_name=APP_NAME,
+                    app_version=APP_VERSION,
+                )
+                st.error(f"Invalid file format: {e}")
+                return
+
+    df_in = st.session_state["fulfilment_df_in"]
+    preview_df = st.session_state["fulfilment_preview_df"]
+    df_out = st.session_state["fulfilment_df_out"]
+    stats = st.session_state["fulfilment_stats"]
+
+    if df_in is None or preview_df is None or df_out is None or stats is None:
+        return
+
+    category_counts = (
+        preview_df["__Category"]
+        .value_counts()
+        .reindex(["LBT", "Parcel", "Track24", "TrackParcel"], fill_value=0)
+    )
+
+    st.subheader("Click & Drop summary")
+
+    c0, c1, c2 = st.columns(3)
+    c0.metric("Orders", stats["total_orders"])
+    c1.metric("Products", stats["total_products"])
+    c2.metric("LBT", int(category_counts["LBT"]))
+
+    c3, c4, c5 = st.columns(3)
+    c3.metric("Parcel", int(category_counts["Parcel"]))
+    c4.metric("Track24", int(category_counts["Track24"]))
+    c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
+
+    csv_bytes = df_out.to_csv(index=False).encode("utf-8")
+    excel_bytes = to_excel_autofit(df_out)
+    csv_name, xlsx_name = build_output_filenames()
+
+    st.markdown("### Download Click & Drop file")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.download_button(
+            label="⬇️ Download Click & Drop CSV",
+            data=csv_bytes,
+            file_name=csv_name,
+            mime="text/csv",
+            key="download_fulfilment_click_drop_csv",
+            use_container_width=True,
+        )
+
+    with col2:
+        st.download_button(
+            label="⬇️ Download Excel for checking",
+            data=excel_bytes,
+            file_name=xlsx_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_fulfilment_click_drop_xlsx",
+            use_container_width=True,
+        )
+
+    with st.expander("Preview formatted rows", expanded=False):
+        st.dataframe(preview_df.head(20), width="stretch")
+
+    st.divider()
+
+    st.subheader("Step 2 — Upload labels PDF and add tracking")
+    st.caption(
+        "After you create Royal Mail labels manually, come back here and upload the labels PDF. "
+        "The original orders file is already remembered."
+    )
+
+    labels_pdf = st.file_uploader(
+        "Drop Royal Mail labels PDF here",
+        type=["pdf"],
+        key="fulfilment_labels_pdf",
+    )
+
+    if labels_pdf is None:
+        st.info("Waiting for labels PDF")
+        return
+
+    st.session_state["fulfilment_labels_pdf_name"] = labels_pdf.name
+    st.session_state["fulfilment_labels_pdf_bytes"] = labels_pdf.getvalue()
+
+    try:
+        labels_pdf.seek(0)
+        labels = extract_label_pages(labels_pdf)
+    except Exception as e:
+        st.error(f"Could not read labels PDF: {e}")
+        return
+
+    st.markdown("### Quick Check")
+    m1, m2 = st.columns(2)
+    m1.metric("Order rows remembered", len(df_in))
+    m2.metric("Label pages", len(labels))
+
+    if len(df_in) != len(labels):
+        st.error(
+            f"Row count mismatch: remembered order file has {len(df_in)} rows but labels PDF has {len(labels)} pages"
+        )
+        return
+
+    if st.button(
+        "Add Tracking to remembered orders",
+        type="primary",
+        key="run_fulfilment_add_tracking",
+        use_container_width=True,
+    ):
+        progress_placeholder = st.empty()
+        status_placeholder = st.empty()
+
+        progress_bar = progress_placeholder.progress(0)
+        status_text = status_placeholder.empty()
+
+        try:
+            labels_pdf.seek(0)
+            tracking_df, audit_df = add_tracking_column_from_labels(
+                df_in,
+                labels_pdf,
+                progress_bar=progress_bar,
+                status_text=status_text,
+            )
+
+            st.session_state["fulfilment_tracking_df"] = tracking_df
+            st.session_state["fulfilment_audit_df"] = audit_df
+
+            log_event(
+                "fulfilment_tracking_success",
+                file_name=st.session_state["fulfilment_input_name"],
+                file_type=st.session_state["fulfilment_input_type"],
+                input_rows=len(df_in),
+                success=True,
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
+            )
+
+        except Exception as e:
+            log_event(
+                "fulfilment_tracking_failed",
+                file_name=st.session_state["fulfilment_input_name"],
+                file_type=st.session_state["fulfilment_input_type"],
+                input_rows=len(df_in),
+                success=False,
+                error_message=str(e),
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
+            )
+            st.error(str(e))
+            return
+        finally:
+            progress_placeholder.empty()
+            status_placeholder.empty()
+
+    tracking_df = st.session_state["fulfilment_tracking_df"]
+    audit_df = st.session_state["fulfilment_audit_df"]
+
+    if tracking_df is None:
+        return
+
+    st.success(f"Tracking added successfully to {len(tracking_df)} rows.")
+
+    base_name, _ = os.path.splitext(st.session_state["fulfilment_input_name"])
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    tracking_csv_name = f"{base_name}_with_tracking_{stamp}.csv"
+    tracking_xlsx_name = f"{base_name}_with_tracking_{stamp}.xlsx"
+
+    tracking_csv_bytes = tracking_df.to_csv(index=False).encode("utf-8")
+    tracking_excel_bytes = to_excel_autofit(tracking_df)
+
+    st.markdown("### Download tracking result")
+
+    t1, t2 = st.columns(2)
+
+    with t1:
+        st.download_button(
+            label="⬇️ Download Tracking CSV",
+            data=tracking_csv_bytes,
+            file_name=tracking_csv_name,
+            mime="text/csv",
+            key="download_fulfilment_tracking_csv",
+            use_container_width=True,
+        )
+
+    with t2:
+        st.download_button(
+            label="⬇️ Download Tracking Excel",
+            data=tracking_excel_bytes,
+            file_name=tracking_xlsx_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_fulfilment_tracking_xlsx",
+            use_container_width=True,
+        )
+
+    if audit_df is not None:
+        with st.expander("Preview verified tracking rows", expanded=False):
+            st.dataframe(audit_df.head(20), width="stretch")
+
+
 def render_formatting_page():
     st.caption("Upload your orders export and generate a Click & Drop ready file.")
 
@@ -444,11 +735,13 @@ def main():
 
     mode = st.radio(
         "Workflow",
-        ["Formatting", "Add Tracking"],
+        ["Full Fulfilment Workflow", "Formatting", "Add Tracking"],
         horizontal=True,
     )
 
-    if mode == "Formatting":
+    if mode == "Full Fulfilment Workflow":
+        render_full_fulfilment_workflow()
+    elif mode == "Formatting":
         render_formatting_page()
     else:
         render_add_tracking_page()
