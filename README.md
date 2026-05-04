@@ -211,7 +211,7 @@ Install dependencies:
 
 ```powershell
 pip install -r requirements.txt
-
+```
 
 ------------------------------------------------------------------------
 
