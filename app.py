@@ -236,11 +236,20 @@ def render_email_results_section(
         st.warning("Labels PDF is not available in memory. Upload the labels PDF again before sending emails.")
         return
 
+    email_send_confirmed = st.checkbox(
+        "I confirm the tracking CSV and labels PDF are correct and ready to send.",
+        key="email_send_confirmed",
+    )
+
+    if not email_send_confirmed:
+        st.warning("Confirm the files before sending operational emails.")
+
     if st.button(
         "Send separate emails",
         type="primary",
         key="send_fulfilment_result_emails",
         use_container_width=True,
+        disabled=not email_send_confirmed,
     ):
         if not tracking_to and not labels_to:
             st.error("Enter at least one recipient email.")
