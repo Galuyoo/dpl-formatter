@@ -460,9 +460,19 @@ def render_full_fulfilment_workflow():
     st.session_state["fulfilment_labels_pdf_name"] = labels_pdf.name
     st.session_state["fulfilment_labels_pdf_bytes"] = labels_pdf.getvalue()
 
+    skip_pages_without_tracking = st.checkbox(
+        "Skip PDF pages with no tracking number",
+        value=False,
+        key="fulfilment_skip_pages_without_tracking",
+        help="Use this when some labels have extra pages with no tracking number. The app will count only pages that contain tracking numbers.",
+    )
+
     try:
         labels_pdf.seek(0)
-        labels = extract_label_pages(labels_pdf)
+        labels = extract_label_pages(
+            labels_pdf,
+            skip_pages_without_tracking=skip_pages_without_tracking,
+        )
     except Exception as e:
         st.error(f"Could not read labels PDF: {e}")
         return
@@ -470,7 +480,7 @@ def render_full_fulfilment_workflow():
     st.markdown("### Quick Check")
     m1, m2 = st.columns(2)
     m1.metric("Order rows remembered", len(df_in))
-    m2.metric("Label pages", len(labels))
+    m2.metric("Tracking labels found" if skip_pages_without_tracking else "Label pages", len(labels))
 
     if len(df_in) != len(labels):
         st.error(
@@ -497,6 +507,7 @@ def render_full_fulfilment_workflow():
                 labels_pdf,
                 progress_bar=progress_bar,
                 status_text=status_text,
+                skip_pages_without_tracking=skip_pages_without_tracking,
             )
 
             st.session_state["fulfilment_tracking_df"] = tracking_df
@@ -804,13 +815,23 @@ def render_add_tracking_page():
     try:
         df_in = load_input_file(input_file)
 
+        skip_pages_without_tracking = st.checkbox(
+            "Skip PDF pages with no tracking number",
+            value=False,
+            key="tracking_skip_pages_without_tracking",
+            help="Use this when some labels have extra pages with no tracking number. The app will count only pages that contain tracking numbers.",
+        )
+
         labels_pdf.seek(0)
-        labels = extract_label_pages(labels_pdf)
+        labels = extract_label_pages(
+            labels_pdf,
+            skip_pages_without_tracking=skip_pages_without_tracking,
+        )
 
         st.subheader("Quick Check")
         m1, m2 = st.columns(2)
         m1.metric("Order rows", len(df_in))
-        m2.metric("Label pages", len(labels))
+        m2.metric("Tracking labels found" if skip_pages_without_tracking else "Label pages", len(labels))
 
         if len(df_in) != len(labels):
             st.error(
@@ -839,6 +860,7 @@ def render_add_tracking_page():
                 labels_pdf,
                 progress_bar=progress_bar,
                 status_text=status_text,
+                skip_pages_without_tracking=skip_pages_without_tracking,
             )
 
             progress_placeholder.empty()
