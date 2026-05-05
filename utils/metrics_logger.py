@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import gspread
+from gspread.utils import rowcol_to_a1
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
@@ -37,6 +38,11 @@ HEADERS = [
     "success",
     "error_message",
 ]
+
+
+def get_metrics_table_range() -> str:
+    """Force Google Sheets appends to the intended metrics table."""
+    return f"A1:{rowcol_to_a1(1, len(HEADERS))}"
 
 
 def get_session_id() -> str:
@@ -141,7 +147,7 @@ def log_event(
             _safe_bool(success),
             error_message[:1000] if error_message else "",
         ]
-        ws.append_row(row, value_input_option="RAW")
+        ws.append_row(row, value_input_option="RAW", table_range=get_metrics_table_range())
     except Exception:
         # Never interrupt the main app
         pass
