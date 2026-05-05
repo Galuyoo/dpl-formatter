@@ -216,7 +216,7 @@ def render_email_results_section(
 
     labels_subject = st.text_input(
         "Labels PDF email subject",
-        value=f"Royal Mail Labels PDF - {default_subject_stamp}",
+        value=f"{tracking_lot} - LABELS - {default_subject_stamp}",
         key="email_labels_pdf_subject",
     )
 
