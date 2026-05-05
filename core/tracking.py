@@ -19,8 +19,9 @@ def validate_tracking_input_columns(df: pd.DataFrame) -> None:
         )
 
 
-def extract_label_pages(pdf_file) -> list[dict]:
+def extract_label_pages(pdf_file, *, skip_pages_without_tracking: bool = False) -> list[dict]:
     pages_data = []
+    skipped_pages = []
 
     with pdfplumber.open(pdf_file) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
@@ -28,6 +29,9 @@ def extract_label_pages(pdf_file) -> list[dict]:
 
             tracking_match = TRACKING_PATTERN.search(text)
             if not tracking_match:
+                if skip_pages_without_tracking:
+                    skipped_pages.append(page_num)
+                    continue
                 raise ValueError(f"No tracking number found on page {page_num}")
 
             pages_data.append(
@@ -37,6 +41,9 @@ def extract_label_pages(pdf_file) -> list[dict]:
                     "raw_text": text,
                 }
             )
+
+    if skip_pages_without_tracking and not pages_data:
+        raise ValueError("No tracking numbers found in labels PDF.")
 
     return pages_data
 
@@ -72,16 +79,21 @@ def add_tracking_column_from_labels(
     pdf_file,
     progress_bar=None,
     status_text=None,
+    skip_pages_without_tracking: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = df.copy()
     validate_tracking_input_columns(df)
 
     pdf_file.seek(0)
-    labels = extract_label_pages(pdf_file)
+    labels = extract_label_pages(
+        pdf_file,
+        skip_pages_without_tracking=skip_pages_without_tracking,
+    )
 
     if len(df) != len(labels):
+        label_count_name = "tracking labels" if skip_pages_without_tracking else "pages"
         raise ValueError(
-            f"Row count mismatch: input file has {len(df)} rows but labels PDF has {len(labels)} pages"
+            f"Row count mismatch: input file has {len(df)} rows but labels PDF has {len(labels)} {label_count_name}"
         )
 
     tracking_values = []
