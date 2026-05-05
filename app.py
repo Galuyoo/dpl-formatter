@@ -44,6 +44,7 @@ def load_metrics_df() -> pd.DataFrame:
             "parcel_count",
             "track24_count",
             "trackparcel_count",
+            "tracking_labels_found",
         ]
 
         for col in numeric_cols:
@@ -61,6 +62,12 @@ def load_metrics_df() -> pd.DataFrame:
             "app_version",
             "file_name",
             "file_type",
+            "workflow",
+            "selected_lot",
+            "email_tracking_recipient",
+            "email_labels_recipient",
+            "email_sent_items",
+            "skip_pages_without_tracking",
             "error_message",
         ]
 
@@ -278,8 +285,31 @@ def render_email_results_section(
                 sent.append("labels PDF")
 
         except Exception as e:
+            log_event(
+                "fulfilment_email_failed",
+                workflow="full_fulfilment",
+                selected_lot=tracking_lot,
+                email_tracking_recipient=tracking_to,
+                email_labels_recipient=labels_to,
+                success=False,
+                error_message=str(e),
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
+            )
             st.error(f"Email sending failed: {e}")
             return
+
+        log_event(
+            "fulfilment_email_sent",
+            workflow="full_fulfilment",
+            selected_lot=tracking_lot,
+            email_tracking_recipient=tracking_to if "tracking CSV" in sent else "",
+            email_labels_recipient=labels_to if "labels PDF" in sent else "",
+            email_sent_items=", ".join(sent),
+            success=True,
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
+        )
 
         st.success("Sent: " + ", ".join(sent))
 
@@ -359,6 +389,7 @@ def render_full_fulfilment_workflow():
 
                 log_event(
                     "fulfilment_file_processed",
+                    workflow="full_fulfilment",
                     file_name=file_name,
                     file_type=file_type,
                     input_rows=len(df_in),
@@ -372,6 +403,7 @@ def render_full_fulfilment_workflow():
             except Exception as e:
                 log_event(
                     "fulfilment_process_failed",
+                    workflow="full_fulfilment",
                     file_name=file_name,
                     file_type=file_type,
                     success=False,
@@ -515,9 +547,12 @@ def render_full_fulfilment_workflow():
 
             log_event(
                 "fulfilment_tracking_success",
+                workflow="full_fulfilment",
                 file_name=st.session_state["fulfilment_input_name"],
                 file_type=st.session_state["fulfilment_input_type"],
                 input_rows=len(df_in),
+                tracking_labels_found=len(audit_df),
+                skip_pages_without_tracking=skip_pages_without_tracking,
                 success=True,
                 app_name=APP_NAME,
                 app_version=APP_VERSION,
@@ -526,9 +561,12 @@ def render_full_fulfilment_workflow():
         except Exception as e:
             log_event(
                 "fulfilment_tracking_failed",
+                workflow="full_fulfilment",
                 file_name=st.session_state["fulfilment_input_name"],
                 file_type=st.session_state["fulfilment_input_type"],
                 input_rows=len(df_in),
+                tracking_labels_found=len(labels) if "labels" in locals() else None,
+                skip_pages_without_tracking=skip_pages_without_tracking if "skip_pages_without_tracking" in locals() else None,
                 success=False,
                 error_message=str(e),
                 app_name=APP_NAME,
@@ -625,6 +663,7 @@ def render_formatting_page():
     ):
         log_event(
             "file_uploaded",
+            workflow="formatting",
             file_name=file_name,
             file_type=file_type,
             success=True,
@@ -639,6 +678,7 @@ def render_formatting_page():
     except Exception as e:
         log_event(
             "process_failed",
+            workflow="formatting",
             file_name=file_name,
             file_type=file_type,
             success=False,
@@ -659,6 +699,7 @@ def render_formatting_page():
     if st.session_state.get("last_success_logged_for") != success_key:
         log_event(
             "process_success",
+            workflow="formatting",
             file_name=file_name,
             file_type=file_type,
             input_rows=len(df_in),
@@ -707,6 +748,7 @@ def render_formatting_page():
         if csv_clicked:
             log_event(
                 "download_csv",
+                workflow="formatting",
                 file_name=file_name,
                 file_type=file_type,
                 input_rows=len(df_in),
@@ -733,6 +775,7 @@ def render_formatting_page():
         if xlsx_clicked:
             log_event(
                 "download_xlsx",
+                workflow="formatting",
                 file_name=file_name,
                 file_type=file_type,
                 input_rows=len(df_in),
@@ -804,6 +847,7 @@ def render_add_tracking_page():
     ):
         log_event(
             "tracking_files_uploaded",
+            workflow="add_tracking",
             file_name=input_name,
             file_type=input_type,
             success=True,
@@ -872,9 +916,11 @@ def render_add_tracking_page():
             if st.session_state.get("last_success_logged_for_tracking") != success_key:
                 log_event(
                     "tracking_process_success",
+                    workflow="add_tracking",
                     file_name=input_name,
                     file_type=input_type,
                     input_rows=len(df_in),
+                    tracking_labels_found=len(audit_df) if "audit_df" in locals() else None,
                     success=True,
                     app_name=APP_NAME,
                     app_version=APP_VERSION,
@@ -896,6 +942,7 @@ def render_add_tracking_page():
             if download_clicked:
                 log_event(
                     "download_tracking_output",
+                    workflow="add_tracking",
                     file_name=input_name,
                     file_type=input_type,
                     input_rows=len(df_in),
@@ -910,6 +957,7 @@ def render_add_tracking_page():
     except Exception as e:
         log_event(
             "tracking_process_failed",
+            workflow="add_tracking",
             file_name=input_name,
             file_type=input_type,
             success=False,
