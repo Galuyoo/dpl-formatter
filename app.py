@@ -13,8 +13,15 @@ from core.file_io import (
     to_excel_autofit,
 )
 from core.tracking import add_tracking_column_from_labels, extract_label_pages
-from core.transform import transform_orders
-from utils.metrics_logger import get_metrics_worksheet, get_session_id, log_event
+from core.transform import (
+    DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT,
+    PRODUCT_NAME_WARNING_LIMIT,
+    apply_product_name_rules_to_df,
+    get_product_name_length_issues,
+    parse_shortening_rules,
+    transform_orders,
+)
+from utils.metrics_logger import HEADERS, get_metrics_worksheet, get_session_id, log_event
 
 st.set_page_config(page_title="Formatter", layout="centered")
 
@@ -30,11 +37,26 @@ def is_local_environment() -> bool:
 def load_metrics_df() -> pd.DataFrame:
     try:
         ws = get_metrics_worksheet()
-        records = ws.get_all_records()
-        if not records:
-            return pd.DataFrame()
 
-        df = pd.DataFrame(records)
+        # Read only the configured metrics columns. Extra blank columns in the
+        # Google Sheet can make get_all_records() fail due to duplicate blank headers.
+        values = ws.get(f"A1:W{ws.row_count}")
+
+        if len(values) <= 1:
+            return pd.DataFrame(columns=HEADERS)
+
+        rows = values[1:]
+        normalized_rows = []
+
+        for row in rows:
+            padded = row[: len(HEADERS)] + [""] * max(0, len(HEADERS) - len(row))
+            if any(str(cell).strip() for cell in padded):
+                normalized_rows.append(padded)
+
+        if not normalized_rows:
+            return pd.DataFrame(columns=HEADERS)
+
+        df = pd.DataFrame(normalized_rows, columns=HEADERS)
 
         numeric_cols = [
             "input_rows",
@@ -313,6 +335,86 @@ def render_email_results_section(
 
         st.success("Sent: " + ", ".join(sent))
 
+
+
+def render_product_name_safety_section(
+    df_out: pd.DataFrame,
+    *,
+    key_prefix: str,
+) -> pd.DataFrame:
+    if "Product Name" not in df_out.columns:
+        return df_out
+
+    st.subheader("Product Name safety check")
+    st.caption("Checks Product Name length. Spaces and line breaks count as characters.")
+
+    limit = st.number_input(
+        "Product Name warning limit",
+        min_value=20,
+        max_value=250,
+        value=PRODUCT_NAME_WARNING_LIMIT,
+        step=1,
+        key=f"{key_prefix}_product_name_limit",
+    )
+
+    issues_df = get_product_name_length_issues(df_out, int(limit))
+    lengths = df_out["Product Name"].apply(lambda value: len(str(value)) if pd.notna(value) else 0)
+    max_length = int(lengths.max()) if not lengths.empty else 0
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Rows checked", len(df_out))
+    c2.metric("Over limit", len(issues_df))
+    c3.metric("Max length", max_length)
+
+    if issues_df.empty:
+        st.success("All Product Name values are within the current limit.")
+        return df_out
+
+    st.warning(f"{len(issues_df)} Product Name value(s) exceed {limit} characters.")
+
+    with st.expander("Rows over Product Name limit", expanded=False):
+        st.dataframe(issues_df, width="stretch")
+
+    with st.expander("Product shortening rules", expanded=False):
+        st.caption("One rule per line. Format: OLD => NEW")
+        rules_text = st.text_area(
+            "Rules",
+            value=DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT,
+            height=180,
+            key=f"{key_prefix}_product_name_rules",
+        )
+
+        rules = parse_shortening_rules(rules_text)
+        optimized_df = apply_product_name_rules_to_df(df_out, rules)
+        optimized_issues_df = get_product_name_length_issues(optimized_df, int(limit))
+
+        st.markdown("#### After applying rules")
+
+        optimized_lengths = optimized_df["Product Name"].apply(
+            lambda value: len(str(value)) if pd.notna(value) else 0
+        )
+        optimized_max_length = int(optimized_lengths.max()) if not optimized_lengths.empty else 0
+
+        o1, o2 = st.columns(2)
+        o1.metric("Rows still over limit", len(optimized_issues_df))
+        o2.metric("Optimized max length", optimized_max_length)
+
+        if not optimized_issues_df.empty:
+            st.dataframe(optimized_issues_df, width="stretch")
+        else:
+            st.success("All Product Name values fit after rules.")
+
+        use_rules = st.checkbox(
+            "Use these shortening rules for downloads",
+            value=False,
+            key=f"{key_prefix}_use_product_name_rules",
+        )
+
+    if use_rules:
+        return optimized_df
+
+    return df_out
+
 # ---------- Streamlit pages ----------
 
 def render_full_fulfilment_workflow():
@@ -440,8 +542,9 @@ def render_full_fulfilment_workflow():
     c4.metric("Track24", int(category_counts["Track24"]))
     c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
 
-    csv_bytes = df_out.to_csv(index=False).encode("utf-8")
-    excel_bytes = to_excel_autofit(df_out)
+    download_df = render_product_name_safety_section(df_out, key_prefix="fulfilment")
+    csv_bytes = download_df.to_csv(index=False).encode("utf-8")
+    excel_bytes = to_excel_autofit(download_df)
     csv_name, xlsx_name = build_output_filenames()
 
     st.markdown("### Download Click & Drop file")
@@ -729,8 +832,9 @@ def render_formatting_page():
 
     st.success("File processed successfully.")
 
-    csv_bytes = df_out.to_csv(index=False).encode("utf-8")
-    excel_bytes = to_excel_autofit(df_out)
+    download_df = render_product_name_safety_section(df_out, key_prefix="formatting")
+    csv_bytes = download_df.to_csv(index=False).encode("utf-8")
+    excel_bytes = to_excel_autofit(download_df)
     csv_name, xlsx_name = build_output_filenames()
 
     st.subheader("Download Result")

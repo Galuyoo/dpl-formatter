@@ -1,29 +1,329 @@
+import re
+
 import pandas as pd
 
 from core.classification import classify_row, extract_product_quantity, get_row_tracked_flag
 from core.config import REQUIRED_INPUT_COLUMNS
 
 
-def wrap_product_name(text: str, width: int = 35) -> str:
-    if not isinstance(text, str):
-        return text
+PRODUCT_NAME_LINE_LIMITS = [56, 60, 60, 60]
+EXTENDED_CUSTOMS_LINE_LIMITS = [60] * 12
 
-    words = text.split()
+
+def split_product_items(text: str) -> list[str]:
+    if not isinstance(text, str):
+        return []
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    parts = re.split(r"[,;\n]+", normalized)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def compact_product_item(text: str) -> str:
+    """Shorten repeated label words while preserving item meaning."""
+    item = re.sub(r"\s+", " ", str(text).strip())
+
+    replacements = [
+        (r"\bFront\s*\(", "F("),
+        (r"\bBack\s*\(", "B("),
+        (r"\bSleeve\s*\(", "SLV("),
+        (r"\bLeft\s*\(", "L("),
+        (r"\bRight\s*\(", "R("),
+    ]
+
+    for pattern, replacement in replacements:
+        item = re.sub(pattern, replacement, item, flags=re.IGNORECASE)
+
+    return item
+
+
+def split_long_item_for_label(item: str, limit: int) -> list[str]:
+    """Split overlong single items without hiding any text."""
+    item = item.strip()
+    if len(item) <= limit:
+        return [item]
+
+    lines = []
+    remaining = item
+
+    while len(remaining) > limit:
+        cut = remaining.rfind("-", 0, limit + 1)
+
+        if cut < max(12, int(limit * 0.45)):
+            cut = limit
+            lines.append(remaining[:cut].strip())
+            remaining = remaining[cut:].strip()
+        else:
+            lines.append(remaining[:cut].strip())
+            remaining = remaining[cut + 1 :].strip()
+
+    if remaining:
+        lines.append(remaining)
+
+    return lines
+
+
+def pack_items_into_label_lines(items: list[str], line_limits: list[int]) -> tuple[list[str], list[str]]:
     lines = []
     current = ""
 
-    for word in words:
-        if len(current) + len(word) + (1 if current else 0) > width:
+    for raw_item in items:
+        item = compact_product_item(raw_item)
+        limit = line_limits[min(len(lines), len(line_limits) - 1)]
+
+        item_segments = split_long_item_for_label(item, limit)
+
+        for segment in item_segments:
+            if len(lines) >= len(line_limits):
+                remaining = [segment]
+                remaining.extend(items[items.index(raw_item) + 1 :])
+                return lines, remaining
+
+            limit = line_limits[min(len(lines), len(line_limits) - 1)]
+            candidate = f"{current} | {segment}" if current else segment
+
+            if len(candidate) <= limit:
+                current = candidate
+                continue
+
             if current:
-                lines.append(current.rstrip())
-            current = word
+                lines.append(current)
+                current = ""
+
+            if len(lines) >= len(line_limits):
+                remaining = [segment]
+                remaining.extend(items[items.index(raw_item) + 1 :])
+                return lines, remaining
+
+            current = segment
+
+    if current and len(lines) < len(line_limits):
+        lines.append(current)
+        return lines, []
+
+    return lines, []
+
+
+def format_product_fields_for_label(text: str) -> tuple[str, str]:
+    """Split product text across Product Name and Extended customs description.
+
+    Product Name is physically limited on Royal Mail labels. We keep controlled
+    line lengths there and move overflow into Extended customs description,
+    so all product values can still be printed when the template includes both fields.
+    """
+    items = split_product_items(text)
+
+    if not items:
+        return "", ""
+
+    product_lines, overflow_items = pack_items_into_label_lines(items, PRODUCT_NAME_LINE_LIMITS)
+    extended_lines, remaining_items = pack_items_into_label_lines(
+        overflow_items,
+        EXTENDED_CUSTOMS_LINE_LIMITS,
+    )
+
+    if remaining_items:
+        # Last-resort fallback: still show everything, even if it becomes long.
+        extended_lines.extend(compact_product_item(item) for item in remaining_items)
+
+    return "\n".join(product_lines), "\n".join(extended_lines)
+
+def split_product_items_for_label(text: str) -> list[str]:
+    if not isinstance(text, str):
+        return []
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.replace(";", "\n").replace(",", "\n")
+
+    return [part.strip() for part in normalized.split("\n") if part.strip()]
+
+
+def split_long_product_item(item: str, limit: int) -> list[str]:
+    """Split one over-limit product safely.
+
+    Priority:
+    1. break on spaces
+    2. break on hyphens
+    3. hard cut only as last resort
+
+    Hyphens are preserved at the end of the previous line.
+    """
+    item = str(item).strip()
+
+    if len(item) <= limit:
+        return [item]
+
+    parts = []
+    remaining = item
+    min_safe_cut = max(8, int(limit * 0.35))
+
+    while len(remaining) > limit:
+        space_cut = remaining.rfind(" ", 0, limit + 1)
+
+        if space_cut >= min_safe_cut:
+            parts.append(remaining[:space_cut].strip())
+            remaining = remaining[space_cut + 1:].strip()
+            continue
+
+        hyphen_cut = remaining.rfind("-", 0, limit)
+
+        if hyphen_cut >= min_safe_cut:
+            parts.append(remaining[:hyphen_cut + 1].strip())
+            remaining = remaining[hyphen_cut + 1:].strip()
+            continue
+
+        parts.append(remaining[:limit].strip())
+        remaining = remaining[limit:].strip()
+
+    if remaining:
+        parts.append(remaining)
+
+    return parts
+
+
+def wrap_product_name(text: str, width: int = 35) -> str:
+    """Pack Product Name text into label-friendly lines.
+
+    First line target: 56 characters.
+    Following line target: 60 characters.
+
+    Old line breaks are treated only as separators. The function repacks all
+    product items from scratch so each line is used as much as possible.
+    """
+    if not isinstance(text, str):
+        return text
+
+    line_limits = [56] + [60] * 50
+    items = split_product_items_for_label(text)
+
+    if not items:
+        return ""
+
+    display_items = [
+        f"{item}," if index < len(items) - 1 else item
+        for index, item in enumerate(items)
+    ]
+
+    lines = []
+    current = ""
+
+    for item in display_items:
+        limit = line_limits[min(len(lines), len(line_limits) - 1)]
+
+        if len(item) > limit:
+            item_segments = split_long_product_item(item, limit)
         else:
-            current = (current + " " + word).strip()
+            item_segments = [item]
+
+        for segment in item_segments:
+            limit = line_limits[min(len(lines), len(line_limits) - 1)]
+
+            candidate = f"{current} {segment}".strip() if current else segment
+
+            if len(candidate) <= limit:
+                current = candidate
+                continue
+
+            if current:
+                lines.append(current)
+
+            current = segment
 
     if current:
-        lines.append(current.rstrip())
+        lines.append(current)
 
     return "\n".join(lines)
+
+
+PRODUCT_NAME_WARNING_LIMIT = 95
+
+DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT = """TSHIRT => TS
+LIGHT-BLUE => LTBLUE
+ROYAL BLUE => ROYBLU
+FRONT => F
+BACK => B
+FR+BK => FB
+BLACK => BLK
+WHITE => WHT"""
+
+
+def product_name_length(value) -> int:
+    """Count Product Name characters exactly, including spaces and line breaks."""
+    if pd.isna(value):
+        return 0
+    return len(str(value))
+
+
+def parse_shortening_rules(rules_text: str) -> list[tuple[str, str]]:
+    rules = []
+
+    for line in str(rules_text or "").splitlines():
+        line = line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        if "=>" not in line:
+            continue
+
+        find, replace = line.split("=>", 1)
+        find = find.strip()
+        replace = replace.strip()
+
+        if find:
+            rules.append((find, replace))
+
+    return rules
+
+
+def apply_product_name_shortening_rules(value, rules: list[tuple[str, str]]) -> str:
+    if pd.isna(value):
+        return ""
+
+    text = str(value)
+
+    for find, replace in rules:
+        text = text.replace(find, replace)
+
+    # Shortening can make previously wrapped lines fit together.
+    # Repack after applying rules so we use as much of each label line as possible.
+    return wrap_product_name(text)
+
+
+def apply_product_name_rules_to_df(df: pd.DataFrame, rules: list[tuple[str, str]]) -> pd.DataFrame:
+    out = df.copy()
+
+    if "Product Name" not in out.columns:
+        return out
+
+    out["Product Name"] = out["Product Name"].apply(
+        lambda value: apply_product_name_shortening_rules(value, rules)
+    )
+    return out
+
+
+def get_product_name_length_issues(df: pd.DataFrame, limit: int = PRODUCT_NAME_WARNING_LIMIT) -> pd.DataFrame:
+    if "Product Name" not in df.columns:
+        return pd.DataFrame(columns=["row_number", "order reference", "Product Name", "length", "over_by"])
+
+    rows = []
+
+    for idx, row in df.iterrows():
+        product_name = row.get("Product Name", "")
+        length = product_name_length(product_name)
+
+        if length > limit:
+            rows.append(
+                {
+                    "row_number": idx + 1,
+                    "order reference": row.get("order reference", ""),
+                    "Product Name": product_name,
+                    "length": length,
+                    "over_by": length - limit,
+                }
+            )
+
+    return pd.DataFrame(rows)
 
 
 def validate_input_columns(df: pd.DataFrame) -> None:
