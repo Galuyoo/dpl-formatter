@@ -1,233 +1,164 @@
-![CI](https://github.com/Galuyoo/dpl-formatter/actions/workflows/ci.yml/badge.svg)
+﻿# DPL Formatter
 
+DPL Formatter is a Streamlit operations tool for preparing warehouse order files for Royal Mail Click & Drop, adding tracking numbers back from Royal Mail label PDFs, and emailing fulfilment outputs to the correct recipients.
 
-# DPL Formatter
+The daily workflow is now one tabbed process:
 
-**DPL Formatter** is a lightweight automation tool designed to convert
-warehouse order exports into **Royal Mail Click & Drop compatible
-shipment files**, and to automatically merge **tracking numbers back
-into the original orders** after labels are generated.
+1. Orders
+2. Labels & Tracking
+3. Email / Finish
 
-The system removes repetitive manual formatting work in shipping
-workflows by automatically classifying shipment types, generating a
-Click & Drop import file, and later attaching tracking numbers to the
-same orders dataset.
+The app keeps uploaded order files and label PDFs in session state so the user can move between tabs without re-uploading files.
 
-This project is part of a broader portfolio focused on **automation,
-operational tooling, and infrastructure systems that improve reliability
-in e‑commerce logistics environments**.
+## Current production workflow
 
-------------------------------------------------------------------------
+### 1. Orders tab
 
-# Complete Workflow
+Upload the original CSV or Excel order file.
 
-DPL Formatter supports the **full operational shipping workflow** used
-in warehouse environments.
+The app:
 
-The process consists of two steps.
+- validates required columns
+- classifies each order as LBT, Parcel, Track24, or TrackParcel
+- appends the shipping category to the order reference
+- formats the Product Name field for Click & Drop
+- checks Product Name length
+- applies optional Product Name shortening rules
+- generates Click & Drop CSV and Excel outputs
 
-## 1. Formatting Orders for Click & Drop
+Important Product Name behavior:
 
-Users upload a standard order export file.
+- Product Name warning limit defaults to 95 characters.
+- Spaces and line breaks count as characters.
+- The app shows rows over the limit.
+- Shortening rules are editable in the UI.
+- Shortening rules only affect downloads when the checkbox is enabled.
+- The CSV output only uses Product Name.
+- Extended customs description is not currently used.
 
-The application:
+### 2. Labels & Tracking tab
 
--   validates the file
--   classifies shipment types
--   formats the dataset for Royal Mail Click & Drop
--   generates a clean CSV ready for label generation
+After the user creates labels manually in Royal Mail Click & Drop, they return to the app and upload the labels PDF.
 
-This file can then be uploaded directly into **Royal Mail Click & Drop**
-to generate shipping labels.
+The app:
 
-------------------------------------------------------------------------
+- remembers the original order file from the Orders tab
+- extracts tracking numbers from the labels PDF
+- verifies each tracking label against name and postcode
+- supports skipping PDF pages with no tracking number
+- adds a Tracking column to the original order file
+- generates tracking CSV and Excel outputs
 
-## 2. Merging Tracking Codes Back Into Orders
+Skip-pages behavior:
 
-After labels are generated, Click & Drop produces a **labels PDF** where
-each page contains a shipping label and tracking number.
+- unchecked: strict mode, every PDF page must contain a tracking number
+- checked: pages without tracking are skipped
+- the app checks that tracking labels found equals order rows
 
-DPL Formatter allows users to:
+### 3. Email / Finish tab
 
-1.  upload the original orders file
-2.  upload the labels PDF
-3.  automatically extract tracking numbers
-4.  verify each order against its corresponding label page
-5.  generate a new file containing a **Tracking column**
+After tracking is generated, the app can send separate emails:
 
-Verification ensures that each order row matches the correct label page
-by checking:
+- Tracking CSV recipient is selected by lot.
+- Labels PDF recipient is fixed.
+- A confirmation checkbox is required before sending.
 
--   recipient name
--   postcode
+Current fixed recipients:
 
-This guarantees that tracking numbers are applied to the correct
-customers.
+- Labels PDF: operationsinkstitch@gmail.com
+- Lot X tracking CSV: info@inkstitch.co.uk
+- DPL lot tracking CSV: teefusion786@gmail.com
 
-The resulting file can then be used to:
+The sender is configured through Streamlit secrets.
 
--   send tracking notifications to customers
--   upload tracking numbers to stores or marketplaces
--   maintain shipment records
+## Advanced tools
 
-------------------------------------------------------------------------
+The old separate workflows are still available under Advanced tools:
 
-# Overview
+- Formatting only
+- Add tracking only
 
-In warehouse environments handling large volumes of daily orders,
-preparing shipment imports for Royal Mail Click & Drop typically
-requires:
+Daily use should use the tabbed workflow.
 
--   manual shipment classification
--   modifying order references
--   detecting tracked shipments
--   handling multi-product orders
--   ensuring formatting compatibility
+## Repository structure
 
-DPL Formatter automates this process using a **deterministic
-transformation pipeline**.
+dpl-formatter/
+  app.py
+  core/
+    classification.py
+    config.py
+    email_sender.py
+    file_io.py
+    normalization.py
+    tracking.py
+    transform.py
+  tests/
+    test_classification.py
+    test_email_sender.py
+    test_tracking.py
+    test_transform.py
+  utils/
+    metrics_logger.py
+  docs/
+  requirements.txt
+  .github/workflows/ci.yml
 
-Users can:
+## Local development
 
-1.  Upload a standard order export file
-2.  Automatically classify shipment type
-3.  Preview processed results
-4.  Download a Click & Drop compatible CSV
+Create and activate a virtual environment:
 
-------------------------------------------------------------------------
-
-# Tracking Code Extraction
-
-The system can extract Royal Mail tracking numbers directly from label
-PDFs.
-
-Each label page contains a tracking barcode and associated tracking
-number.
-
-Example:
-
-YT 1644 3183 1GB\
-QM 8440 4148 7GB
-
-During processing the system:
-
-1.  reads the labels PDF
-2.  extracts the tracking number from each page
-3.  matches the page to the corresponding order row
-4.  verifies name and postcode
-5.  appends the tracking number to the dataset
-
-Output column:
-
--   Tracking
-
-------------------------------------------------------------------------
-
-# Architecture
-
-The application follows a simple **three‑layer processing
-architecture**.
-
-## Input Layer
-
-Responsible for file ingestion and validation.
-
-Supported formats:
-
--   CSV
--   XLSX
--   XLS
-
-Before processing begins, the system validates that all required columns
-exist in the uploaded file.
-
-This prevents malformed files from entering the processing pipeline.
-
-------------------------------------------------------------------------
-
-## Processing Layer
-
-The core processing engine applies **rule‑based classification and
-transformation**.
-
-Key operations include:
-
--   shipment classification
--   product quantity detection
--   tracking marker detection
--   product name formatting
--   order reference transformation
-
-All rules are deterministic, ensuring predictable outputs for identical
-inputs.
-
-------------------------------------------------------------------------
-
-## Output Layer
-
-The system generates files compatible with Royal Mail Click & Drop.
-
-Outputs include:
-
--   Click & Drop compatible CSV
--   Excel export for verification
--   summary processing metrics
--   orders file with merged **Tracking column**
-
-Each input row produces **exactly one output row**, ensuring a clear
-transformation pipeline.
-
-------------------------------------------------------------------------
-
-# Deployment
-
-The application is deployed using **Streamlit**.
-
-Local development:
-
-streamlit run app.py
-
-Production deployment can be handled through Streamlit Cloud or other
-hosting platforms, allowing users to upload files directly through the
-web interface.
-
-------------------------------------------------------------------------
-
-# Repository Structure
-
-dpl-formatter\
-├── app.py\
-├── utils/\
-│ └── metrics_logger.py\
-├── requirements.txt\
-├── README.md\
-└── .gitignore
-
-------------------------------------------------------------------------
-
-# Local Development
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
 
 Install dependencies:
 
-```powershell
-pip install -r requirements.txt
-```
+    pip install -r requirements.txt
 
-------------------------------------------------------------------------
+Run the app:
 
-# Future Improvements
+    streamlit run app.py
 
-Possible future developments include:
+Run tests:
 
--   direct Click & Drop API integration
--   automated order ingestion pipelines
--   automated tracking updates to e‑commerce platforms
--   expanded shipping rule configuration
--   integration with warehouse management systems
+    python -m pytest
+    python -m compileall .
 
-------------------------------------------------------------------------
+## Required input columns
 
-# License
+The formatting workflow expects:
 
-Internal operational tool provided for documentation and demonstration
-purposes.
+- order reference
+- product
+- name
+- address 1
+- address 2
+- city
+- postcode
+
+The tracking workflow requires at least:
+
+- name
+- postcode
+
+## Secrets
+
+Local secrets live in:
+
+    .streamlit/secrets.toml
+
+Hosted Streamlit secrets are configured in Streamlit Community Cloud.
+
+Never commit real secrets.
+
+See:
+
+    docs/SECRETS_AND_DEPLOYMENT.md
+
+## Current state and next steps
+
+Read these files before continuing development:
+
+- docs/CURRENT_STATE.md
+- docs/NEXT_STEPS.md
+- docs/RUNBOOK.md
+- docs/DEVELOPMENT_LOG.md
