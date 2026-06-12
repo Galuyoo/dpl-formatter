@@ -39,6 +39,7 @@ BIG_SIZE_PATTERNS = [
     "3XL",
     "4XL",
     "5XL",
+    "6XL",
     "XXXL",
     "XXXXL",
     "XXXXXL",
