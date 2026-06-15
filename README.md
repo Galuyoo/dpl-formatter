@@ -63,12 +63,6 @@ After tracking is generated, the app can send separate emails:
 - Labels PDF recipient is fixed.
 - A confirmation checkbox is required before sending.
 
-Current fixed recipients:
-
-- Labels PDF: operationsinkstitch@gmail.com
-- Lot X tracking CSV: info@inkstitch.co.uk
-- DPL lot tracking CSV: teefusion786@gmail.com
-
 The sender is configured through Streamlit secrets.
 
 ## Advanced tools
