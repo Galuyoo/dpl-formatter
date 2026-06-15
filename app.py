@@ -406,7 +406,7 @@ def render_product_name_safety_section(
 
         use_rules = st.checkbox(
             "Use these shortening rules for downloads",
-            value=False,
+            value=True,
             key=f"{key_prefix}_use_product_name_rules",
         )
 
