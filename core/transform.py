@@ -237,14 +237,13 @@ def wrap_product_name(text: str, width: int = 35) -> str:
 
 PRODUCT_NAME_WARNING_LIMIT = 95
 
-DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT = """TSHIRT => TS
-LIGHT-BLUE => LTBLUE
-ROYAL BLUE => ROYBLU
-FRONT => F
-BACK => B
+DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT = """TSHIRT => T
+HEATHER GREY => HG
+Front => F
+Back => B
 FR+BK => FB
-BLACK => BLK
-WHITE => WHT"""
+Black => BLK
+White=> WH"""
 
 
 def product_name_length(value) -> int:
