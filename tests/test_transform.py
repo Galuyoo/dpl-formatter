@@ -3,6 +3,10 @@ import pytest
 
 from core.transform import (
     apply_product_name_rules_to_df,
+    build_excel_breakdown,
+    build_billing_details,
+    build_management_breakdown_sheets,
+    build_order_item_breakdown,
     get_product_name_length_issues,
     parse_shortening_rules,
     product_name_length,
@@ -43,6 +47,146 @@ def test_transform_orders_adds_category_to_order_reference_and_counts_products()
     assert list(preview_df["__Category"]) == ["LBT", "TrackParcel"]
     assert list(output_df["order reference"]) == ["1001.LBT", "1002.TrackParcel"]
     assert stats == {"total_orders": 2, "total_products": 3}
+
+
+def test_build_excel_breakdown_counts_delivery_and_clothing_types():
+    df = base_df()
+    df.loc[0, "product"] = "Adult T-Shirt Black, Kids Hoodie Red, Mug"
+    df.loc[1, "product"] = "Kids T-Shirt Blue; Adult Sweatshirt Navy; Mug"
+
+    shipment_df, clothing_df, other_df = build_excel_breakdown(df)
+
+    assert dict(zip(shipment_df["Category"], shipment_df["Count"])) == {
+        "LBT": 0,
+        "Parcel": 1,
+        "Track24": 0,
+        "Parcel24": 1,
+    }
+    assert dict(zip(clothing_df["Category"], clothing_df["Count"])) == {
+        "Adult Shirts": 1,
+        "Kids Shirts": 1,
+        "Adult Jumper/Sweatshirt": 1,
+        "Kids Jumper/Sweatshirt": 0,
+        "Kids Hoodies": 1,
+        "Adult Hoodies": 0,
+    }
+    assert other_df.to_dict("records") == [{"Item": "Mug", "Count": 2}]
+
+
+def test_build_management_breakdown_sheets_include_summary_pricing_and_group_details():
+    df = base_df()
+    df.loc[0, "product"] = "Adult T-Shirt Black, Kids Hoodie Red, Mug"
+    df.loc[1, "product"] = "Kids T-Shirt Blue; Adult Sweatshirt Navy; Mug"
+    _, click_drop_df, _ = transform_orders(df)
+
+    sheets = build_management_breakdown_sheets(df, click_drop_df)
+
+    assert list(sheets.keys())[:9] == [
+        "Billing Details",
+        "Billing Rates",
+        "Summary",
+        "Pricing Template",
+        "Item Pricing",
+        "Delivery Breakdown",
+        "Product Breakdown",
+        "Other Item Summary",
+        "All Order Items",
+    ]
+    assert sheets["Click Drop Output"].equals(click_drop_df)
+    assert "Adult Shirts" in sheets
+    assert "Other Items" in sheets
+
+    summary_counts = {
+        (row["Section"], row["Category"]): row["Count"]
+        for row in sheets["Summary"].to_dict("records")
+    }
+    assert summary_counts[("Overall", "Total orders")] == 2
+    assert summary_counts[("Overall", "Total items")] == 6
+    assert summary_counts[("Other item", "Mug")] == 2
+
+    pricing_df = sheets["Pricing Template"]
+    mug_pricing_row = pricing_df[pricing_df["Category"] == "Mug"].iloc[0]
+    assert mug_pricing_row["Category Type"] == "Other item"
+    assert mug_pricing_row["Count"] == 2
+    assert str(mug_pricing_row["Total Price"]).startswith("=C")
+
+    item_pricing_df = sheets["Item Pricing"]
+    mug_item_pricing_row = item_pricing_df[item_pricing_df["Product Item"] == "Mug"].iloc[0]
+    assert mug_item_pricing_row["Product Group"] == "Other items"
+    assert mug_item_pricing_row["Count"] == 2
+
+    adult_shirt_orders = sheets["Adult Shirts"]
+    assert adult_shirt_orders["Order Reference"].tolist() == ["1001"]
+    assert adult_shirt_orders["Product Item"].tolist() == ["Adult T-Shirt Black"]
+
+    other_orders = sheets["Other Items"]
+    assert other_orders["Product Item"].tolist() == ["Mug", "Mug"]
+
+
+def test_order_item_breakdown_prices_kids_shirt_as_lbt_inside_multi_item_order():
+    df = base_df()
+    df.loc[0, "product"] = "TSHIRT-TF139-Navy-12-13YRS(S657), TSHIRT-TF139-Black-XL(S658)"
+
+    item_detail_df = build_order_item_breakdown(df)
+    kids_shirt = item_detail_df[item_detail_df["Product Item"] == "TSHIRT-TF139-Navy-12-13YRS(S657)"].iloc[0]
+
+    assert kids_shirt["Product Group"] == "Kids Shirts"
+    assert kids_shirt["Delivery Type"] == "LBT"
+    assert kids_shirt["Order Delivery Type"] == "Parcel"
+
+
+def test_billing_charges_delivery_once_per_order_using_order_delivery_type():
+    df = base_df()
+    df.loc[0, "product"] = "TSHIRT-TF139-Navy-12-13YRS(S657), TSHIRT-TF139-Black-XL(S658)"
+
+    item_detail_df = build_order_item_breakdown(df)
+    billing_df = build_billing_details(item_detail_df)
+    order_1001_rows = billing_df[billing_df["Order Reference"] == "1001"].to_dict("records")
+
+    assert order_1001_rows[0]["Delivery Type"] == "LBT"
+    assert order_1001_rows[0]["Order Delivery Type"] == "Parcel"
+    assert order_1001_rows[0]["Shipping Price"] == 3.1
+    assert order_1001_rows[1]["Delivery Type"] == "LBT"
+    assert order_1001_rows[1]["Order Delivery Type"] == "Parcel"
+    assert order_1001_rows[1]["Shipping Price"] == 0
+
+
+def test_billing_details_adds_item_shipping_and_total_formulas():
+    df = base_df()
+    df.loc[0, "product"] = "TSHIRT-BLACK-4XL-X1, TSHIRT-BLACK-5XL-X2, TSHIRT-RED-3/4-X3"
+    df.loc[1, "product"] = "Adult Hoodie Black; Mug"
+
+    item_detail_df = build_order_item_breakdown(df)
+    billing_df = build_billing_details(item_detail_df)
+
+    billing_rows = billing_df.iloc[:-1].to_dict("records")
+
+    assert billing_rows[0]["Product Group"] == "Adult Shirts"
+    assert billing_rows[0]["Item Price"] == 5.5
+    assert billing_rows[0]["Shipping Price"] == 3.1
+    assert billing_rows[0]["Line Total"] == '=IF(H2="","",H2+I2)'
+
+    assert billing_rows[1]["Product Group"] == "Adult Shirts"
+    assert billing_rows[1]["Item Price"] == 7.5
+    assert billing_rows[1]["Shipping Price"] == 0
+
+    assert billing_rows[2]["Product Group"] == "Kids Shirts"
+    assert billing_rows[2]["Item Price"] == 4.5
+    assert billing_rows[2]["Shipping Price"] == 0
+
+    assert billing_rows[3]["Product Group"] == "Adult Hoodies"
+    assert billing_rows[3]["Item Price"] == 12.5
+    assert billing_rows[3]["Shipping Price"] == 5.0
+
+    assert billing_rows[4]["Product Group"] == "Other items"
+    assert billing_rows[4]["Item Price"] == ""
+    assert billing_rows[4]["Pricing Note"] == "Enter other item price"
+    assert billing_rows[4]["Shipping Price"] == 0
+    assert billing_rows[4]["Line Total"] == '=IF(H6="","",H6+I6)'
+
+    total_row = billing_df.iloc[-1]
+    assert total_row["Product Item"] == "TOTAL"
+    assert total_row["Line Total"] == "=SUM(J2:J6)"
 
 
 def test_transform_orders_requires_expected_columns():

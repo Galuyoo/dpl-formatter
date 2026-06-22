@@ -2,7 +2,13 @@ import re
 
 import pandas as pd
 
-from core.classification import classify_row, extract_product_quantity, get_row_tracked_flag
+from core.classification import (
+    classify_clothing_item,
+    classify_row,
+    extract_size_tokens,
+    extract_product_quantity,
+    get_row_tracked_flag,
+)
 from core.config import REQUIRED_INPUT_COLUMNS
 
 
@@ -237,13 +243,51 @@ def wrap_product_name(text: str, width: int = 35) -> str:
 
 PRODUCT_NAME_WARNING_LIMIT = 95
 
+SHIPMENT_BREAKDOWN_LABELS = ["LBT", "Parcel", "Track24", "Parcel24"]
+CLOTHING_BREAKDOWN_LABELS = [
+    "Adult Shirts",
+    "Kids Shirts",
+    "Adult Jumper/Sweatshirt",
+    "Kids Jumper/Sweatshirt",
+    "Kids Hoodies",
+    "Adult Hoodies",
+]
+PRODUCT_GROUP_SHEET_NAMES = {
+    "Adult Shirts": "Adult Shirts",
+    "Kids Shirts": "Kids Shirts",
+    "Adult Jumper/Sweatshirt": "Adult Jumpers",
+    "Kids Jumper/Sweatshirt": "Kids Jumpers",
+    "Kids Hoodies": "Kids Hoodies",
+    "Adult Hoodies": "Adult Hoodies",
+    "Other items": "Other Items",
+}
+BILLING_ITEM_PRICES = {
+    "Kids Shirts": 4.5,
+    "Adult Jumper/Sweatshirt": 11.0,
+    "Kids Jumper/Sweatshirt": 9.0,
+    "Adult Hoodies": 12.5,
+    "Kids Hoodies": 10.0,
+}
+BILLING_DELIVERY_PRICES = {
+    "LBT": 2.8,
+    "Parcel": 3.1,
+    "Track24": 5.0,
+    "Parcel24": 5.0,
+}
+ADULT_SHIRT_STANDARD_PRICE = 5.5
+ADULT_SHIRT_PREMIUM_PRICE = 7.5
+ADULT_SHIRT_PREMIUM_SIZE_TOKENS = {"5XL", "6XL"}
+
 DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT = """TSHIRT => T
 HEATHER GREY => HG
 Front => F
 Back => B
 FR+BK => FB
 Black => BLK
-White=> WH"""
+White=> WH
+-CF12-=>-
+-TV20-=>-
+"""
 
 
 def product_name_length(value) -> int:
@@ -323,6 +367,312 @@ def get_product_name_length_issues(df: pd.DataFrame, limit: int = PRODUCT_NAME_W
             )
 
     return pd.DataFrame(rows)
+
+
+def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    working_df = df.copy()
+    working_df["__Tracked"] = working_df.apply(get_row_tracked_flag, axis=1)
+    working_df["__Category"] = working_df.apply(classify_row, axis=1)
+
+    shipment_counts = (
+        working_df["__Category"]
+        .replace({"TrackParcel": "Parcel24"})
+        .value_counts()
+        .reindex(SHIPMENT_BREAKDOWN_LABELS, fill_value=0)
+    )
+
+    clothing_counts = {label: 0 for label in CLOTHING_BREAKDOWN_LABELS}
+    other_counts = {}
+
+    for product in working_df["product"]:
+        for item in split_product_items(product):
+            clothing_type = classify_clothing_item(item)
+            if clothing_type:
+                clothing_counts[clothing_type] += 1
+            else:
+                other_counts[item] = other_counts.get(item, 0) + 1
+
+    shipment_df = pd.DataFrame(
+        {
+            "Category": shipment_counts.index,
+            "Count": shipment_counts.astype(int).values,
+        }
+    )
+    clothing_df = pd.DataFrame(
+        {
+            "Category": CLOTHING_BREAKDOWN_LABELS,
+            "Count": [int(clothing_counts[label]) for label in CLOTHING_BREAKDOWN_LABELS],
+        }
+    )
+    other_df = pd.DataFrame(
+        [
+            {"Item": item, "Count": int(count)}
+            for item, count in sorted(other_counts.items(), key=lambda pair: (-pair[1], pair[0].lower()))
+        ],
+        columns=["Item", "Count"],
+    )
+
+    return shipment_df, clothing_df, other_df
+
+
+def get_delivery_breakdown_label(category: str) -> str:
+    if category == "TrackParcel":
+        return "Parcel24"
+    return category
+
+
+def get_item_delivery_type(row: pd.Series, item: str) -> str:
+    item_row = row.copy()
+    item_row["product"] = item
+    return get_delivery_breakdown_label(classify_row(item_row))
+
+
+def build_order_item_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+
+    for row_number, (_, row) in enumerate(df.iterrows(), start=1):
+        product = row.get("product", "")
+        order_delivery_type = get_delivery_breakdown_label(classify_row(row))
+
+        for item in split_product_items(product):
+            product_group = classify_clothing_item(item) or "Other items"
+            item_delivery_type = get_item_delivery_type(row, item)
+            rows.append(
+                {
+                    "Order Row": row_number,
+                    "Order Reference": row.get("order reference", ""),
+                    "Customer Name": row.get("name", ""),
+                    "Postcode": row.get("postcode", ""),
+                    "City": row.get("city", ""),
+                    "Delivery Type": item_delivery_type,
+                    "Order Delivery Type": order_delivery_type,
+                    "Product Group": product_group,
+                    "Product Item": item,
+                    "Full Product": product,
+                }
+            )
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "Order Row",
+            "Order Reference",
+            "Customer Name",
+            "Postcode",
+            "City",
+            "Delivery Type",
+            "Order Delivery Type",
+            "Product Group",
+            "Product Item",
+            "Full Product",
+        ],
+    )
+
+
+def get_billing_item_price(product_group: str, product_item: str) -> float | None:
+    if product_group == "Adult Shirts":
+        item_size_tokens = set(extract_size_tokens(product_item))
+        if item_size_tokens & ADULT_SHIRT_PREMIUM_SIZE_TOKENS:
+            return ADULT_SHIRT_PREMIUM_PRICE
+        return ADULT_SHIRT_STANDARD_PRICE
+
+    if product_group in BILLING_ITEM_PRICES:
+        return BILLING_ITEM_PRICES[product_group]
+
+    return None
+
+
+def build_billing_details(item_detail_df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    charged_order_rows = set()
+
+    for line_number, row in enumerate(item_detail_df.to_dict("records"), start=1):
+        item_price = get_billing_item_price(row["Product Group"], row["Product Item"])
+        order_row = row["Order Row"]
+        is_first_item_for_order = order_row not in charged_order_rows
+        shipping_price = BILLING_DELIVERY_PRICES.get(row["Order Delivery Type"], 0) if is_first_item_for_order else 0
+        charged_order_rows.add(order_row)
+        excel_row = line_number + 1
+
+        rows.append(
+            {
+                "Line": line_number,
+                "Order Reference": row["Order Reference"],
+                "Customer Name": row["Customer Name"],
+                "Delivery Type": row["Delivery Type"],
+                "Order Delivery Type": row["Order Delivery Type"],
+                "Product Group": row["Product Group"],
+                "Product Item": row["Product Item"],
+                "Item Price": item_price if item_price is not None else "",
+                "Shipping Price": shipping_price,
+                "Line Total": f'=IF(H{excel_row}="","",H{excel_row}+I{excel_row})',
+                "Pricing Note": "" if item_price is not None else "Enter other item price",
+            }
+        )
+
+    total_row_number = len(rows) + 2
+    rows.append(
+        {
+            "Line": "",
+            "Order Reference": "",
+            "Customer Name": "",
+            "Delivery Type": "",
+            "Order Delivery Type": "",
+            "Product Group": "",
+            "Product Item": "TOTAL",
+            "Item Price": "",
+            "Shipping Price": "",
+            "Line Total": f"=SUM(J2:J{total_row_number - 1})" if len(rows) > 0 else 0,
+            "Pricing Note": "",
+        }
+    )
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "Line",
+            "Order Reference",
+            "Customer Name",
+            "Delivery Type",
+            "Order Delivery Type",
+            "Product Group",
+            "Product Item",
+            "Item Price",
+            "Shipping Price",
+            "Line Total",
+            "Pricing Note",
+        ],
+    )
+
+
+def build_billing_rates() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Type": "Item", "Category": "Adult Shirt up to 4XL", "Price": ADULT_SHIRT_STANDARD_PRICE},
+            {"Type": "Item", "Category": "Adult Shirt 5XL/6XL", "Price": ADULT_SHIRT_PREMIUM_PRICE},
+            {"Type": "Item", "Category": "Kids Shirt", "Price": BILLING_ITEM_PRICES["Kids Shirts"]},
+            {"Type": "Item", "Category": "Adult Jumper/Sweatshirt", "Price": BILLING_ITEM_PRICES["Adult Jumper/Sweatshirt"]},
+            {"Type": "Item", "Category": "Kids Jumper/Sweatshirt", "Price": BILLING_ITEM_PRICES["Kids Jumper/Sweatshirt"]},
+            {"Type": "Item", "Category": "Adult Hoodie", "Price": BILLING_ITEM_PRICES["Adult Hoodies"]},
+            {"Type": "Item", "Category": "Kids Hoodie", "Price": BILLING_ITEM_PRICES["Kids Hoodies"]},
+            {"Type": "Delivery", "Category": "LBT", "Price": BILLING_DELIVERY_PRICES["LBT"]},
+            {"Type": "Delivery", "Category": "Parcel", "Price": BILLING_DELIVERY_PRICES["Parcel"]},
+            {"Type": "Delivery", "Category": "Track24", "Price": BILLING_DELIVERY_PRICES["Track24"]},
+            {"Type": "Delivery", "Category": "Parcel24", "Price": BILLING_DELIVERY_PRICES["Parcel24"]},
+        ],
+        columns=["Type", "Category", "Price"],
+    )
+
+
+def build_management_breakdown_sheets(
+    df_in: pd.DataFrame,
+    click_drop_df: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    shipment_df, clothing_df, other_df = build_excel_breakdown(df_in)
+    item_detail_df = build_order_item_breakdown(df_in)
+    billing_details_df = build_billing_details(item_detail_df)
+    billing_rates_df = build_billing_rates()
+
+    total_orders = len(df_in)
+    total_items = len(item_detail_df)
+    other_item_count = int(other_df["Count"].sum()) if not other_df.empty else 0
+
+    summary_rows = [
+        {"Section": "Overall", "Category": "Total orders", "Count": int(total_orders)},
+        {"Section": "Overall", "Category": "Total items", "Count": int(total_items)},
+        {"Section": "Overall", "Category": "Other items", "Count": other_item_count},
+    ]
+    summary_rows.extend(
+        {"Section": "Delivery", "Category": row.Category, "Count": int(row.Count)}
+        for row in shipment_df.itertuples(index=False)
+    )
+    summary_rows.extend(
+        {"Section": "Product", "Category": row.Category, "Count": int(row.Count)}
+        for row in clothing_df.itertuples(index=False)
+    )
+    summary_rows.extend(
+        {"Section": "Other item", "Category": row.Item, "Count": int(row.Count)}
+        for row in other_df.itertuples(index=False)
+    )
+    summary_df = pd.DataFrame(summary_rows, columns=["Section", "Category", "Count"])
+
+    pricing_rows = []
+    for row in clothing_df.itertuples(index=False):
+        pricing_rows.append(
+            {
+                "Category Type": "Product group",
+                "Category": row.Category,
+                "Count": int(row.Count),
+                "Unit Price": "",
+                "Total Price": f"=C{len(pricing_rows) + 2}*D{len(pricing_rows) + 2}",
+            }
+        )
+
+    for row in other_df.itertuples(index=False):
+        pricing_rows.append(
+            {
+                "Category Type": "Other item",
+                "Category": row.Item,
+                "Count": int(row.Count),
+                "Unit Price": "",
+                "Total Price": f"=C{len(pricing_rows) + 2}*D{len(pricing_rows) + 2}",
+            }
+        )
+
+    pricing_df = pd.DataFrame(
+        pricing_rows,
+        columns=["Category Type", "Category", "Count", "Unit Price", "Total Price"],
+    )
+    item_pricing_rows = []
+
+    if not item_detail_df.empty:
+        item_counts = (
+            item_detail_df.groupby(["Product Group", "Product Item"], dropna=False)
+            .size()
+            .reset_index(name="Count")
+            .sort_values(["Product Group", "Product Item"])
+        )
+
+        for _, row in item_counts.iterrows():
+            item_pricing_rows.append(
+                {
+                    "Product Group": row["Product Group"],
+                    "Product Item": row["Product Item"],
+                    "Count": int(row["Count"]),
+                    "Unit Price": "",
+                    "Total Price": f"=C{len(item_pricing_rows) + 2}*D{len(item_pricing_rows) + 2}",
+                }
+            )
+
+    item_pricing_df = pd.DataFrame(
+        item_pricing_rows,
+        columns=["Product Group", "Product Item", "Count", "Unit Price", "Total Price"],
+    )
+
+    sheets = {
+        "Billing Details": billing_details_df,
+        "Billing Rates": billing_rates_df,
+        "Summary": summary_df,
+        "Pricing Template": pricing_df,
+        "Item Pricing": item_pricing_df,
+        "Delivery Breakdown": shipment_df,
+        "Product Breakdown": clothing_df,
+        "Other Item Summary": other_df,
+        "All Order Items": item_detail_df,
+        "Click Drop Output": click_drop_df,
+    }
+
+    for delivery_type in SHIPMENT_BREAKDOWN_LABELS:
+        sheets[f"Delivery {delivery_type}"] = item_detail_df[
+            item_detail_df["Delivery Type"] == delivery_type
+        ].copy()
+
+    for product_group, sheet_name in PRODUCT_GROUP_SHEET_NAMES.items():
+        sheets[sheet_name] = item_detail_df[
+            item_detail_df["Product Group"] == product_group
+        ].copy()
+
+    return sheets
 
 
 def validate_input_columns(df: pd.DataFrame) -> None:

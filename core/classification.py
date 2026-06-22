@@ -12,6 +12,41 @@ from core.config import (
 )
 from core.normalization import normalize_text
 
+ADULT_SIZE_TOKENS = {"XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL", "6XL"}
+KIDS_SIZE_TOKENS = {"2", "3/4", "5/6", "7/8", "9/10", "9/11", "11/13", "12/13", "12-13"}
+ADULT_WORD_PATTERNS = [
+    r"\bADULT\b",
+    r"\bMENS?\b",
+    r"\bWOMENS?\b",
+    r"\bLADIES\b",
+]
+KIDS_WORD_PATTERNS = [
+    r"\bKID\b",
+    r"\bKIDS\b",
+    r"\bCHILD\b",
+    r"\bCHILDREN\b",
+    r"\bYOUTH\b",
+    r"\bYOUTHS\b",
+    r"\bBOY\b",
+    r"\bBOYS\b",
+    r"\bGIRL\b",
+    r"\bGIRLS\b",
+    r"\bTODDLER\b",
+    r"\bJUNIOR\b",
+    r"\bJUNIORS\b",
+]
+ADULT_SIZE_PATTERN = re.compile(
+    r"(?<![A-Z0-9])"
+    r"(?:XS|S|M|L|XL|2XL|3XL|4XL|5XL|6XL|SMALL|MEDIUM|LARGE)"
+    r"(?![A-Z0-9])"
+)
+KIDS_SIZE_PATTERN = re.compile(
+    r"(?<![A-Z0-9])"
+    r"(?:2|3/4|5/6|7/8|9/10|9/11|11/13|12/13|12-13)"
+    r"(?:\s*(?:YEARS?|YRS?|YR|Y))?"
+    r"(?![A-Z0-9])"
+)
+
 
 def is_tracked_value(value) -> bool:
     txt = normalize_text(value).lower()
@@ -79,6 +114,48 @@ def extract_product_quantity(product: str) -> int:
 
     parts = [part.strip() for part in re.split(r"[,;\n]+", product) if part.strip()]
     return max(1, len(parts))
+
+
+def is_kids_product(product: str) -> bool:
+    txt = normalize_text(product)
+    return any(re.search(pattern, txt) for pattern in KIDS_WORD_PATTERNS) or has_kids_size(product)
+
+
+def has_adult_signal(product: str) -> bool:
+    txt = normalize_text(product)
+    return bool(ADULT_SIZE_PATTERN.search(txt)) or any(
+        re.search(pattern, txt) for pattern in ADULT_WORD_PATTERNS
+    )
+
+
+def extract_size_tokens(product: str) -> list[str]:
+    txt = normalize_text(product)
+    return [token for token in re.split(r"[^A-Z0-9/]+", txt) if token]
+
+
+def has_kids_size(product: str) -> bool:
+    txt = normalize_text(product)
+    return bool(KIDS_SIZE_PATTERN.search(txt))
+
+
+def classify_clothing_item(product: str) -> str | None:
+    txt = normalize_text(product)
+    is_kids = is_kids_product(product)
+    is_adult = has_adult_signal(product)
+
+    if not is_kids and not is_adult:
+        return None
+
+    if any(pattern in txt for pattern in ["HOODIE", "HOODED"]):
+        return "Kids Hoodies" if is_kids else "Adult Hoodies"
+
+    if any(pattern in txt for pattern in ["JUMPER", "SWEATSHIRT", "SWEATER"]):
+        return "Kids Jumper/Sweatshirt" if is_kids else "Adult Jumper/Sweatshirt"
+
+    if is_tshirt_product(product) or re.search(r"\bSHIRT\b", txt):
+        return "Kids Shirts" if is_kids else "Adult Shirts"
+
+    return None
 
 
 def is_lbt_product(product: str) -> bool:

@@ -47,6 +47,19 @@ client_x509_cert_url = "..."
 
 The Google Sheet must be shared with the service account client_email as Editor.
 
+## Admin Excel download password
+
+The management billing workbook is admin-only.
+
+In `.streamlit/secrets.toml`:
+
+    [admin]
+    download_password = "CHOOSE_A_STRONG_PASSWORD"
+
+Or set this environment variable:
+
+    ADMIN_DOWNLOAD_PASSWORD=CHOOSE_A_STRONG_PASSWORD
+
 ## Etsy secrets
 
 Etsy is not production-ready yet.

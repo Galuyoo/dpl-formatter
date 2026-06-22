@@ -1,3 +1,4 @@
+import hmac
 import os
 from datetime import datetime
 
@@ -11,12 +12,15 @@ from core.file_io import (
     get_file_type,
     load_input_file,
     to_excel_autofit,
+    to_excel_workbook_autofit,
 )
 from core.tracking import add_tracking_column_from_labels, extract_label_pages
 from core.transform import (
     DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT,
     PRODUCT_NAME_WARNING_LIMIT,
     apply_product_name_rules_to_df,
+    build_excel_breakdown,
+    build_management_breakdown_sheets,
     get_product_name_length_issues,
     parse_shortening_rules,
     transform_orders,
@@ -160,6 +164,90 @@ def get_email_secret(key: str, default="") -> str:
 
     env_key = f"EMAIL_{key.upper()}"
     return str(value or os.getenv(env_key, default)).strip()
+
+
+def get_admin_download_password() -> str:
+    try:
+        admin_config = st.secrets.get("admin", {})
+        top_level_value = st.secrets.get("ADMIN_DOWNLOAD_PASSWORD", "")
+    except Exception:
+        admin_config = {}
+        top_level_value = ""
+
+    admin_value = ""
+    if isinstance(admin_config, dict):
+        admin_value = admin_config.get("download_password", "")
+    else:
+        admin_value = getattr(admin_config, "download_password", "")
+
+    return str(admin_value or top_level_value or os.getenv("ADMIN_DOWNLOAD_PASSWORD", "")).strip()
+
+
+def render_admin_excel_download(
+    *,
+    df_in: pd.DataFrame,
+    download_df: pd.DataFrame,
+    file_name: str,
+    button_label: str,
+    key_prefix: str,
+) -> bool:
+    password = get_admin_download_password()
+    unlocked_key = f"{key_prefix}_admin_excel_unlocked"
+
+    if not password:
+        st.warning("Admin Excel download is not configured.")
+        with st.expander("Admin password setup", expanded=False):
+            st.code(
+                "[admin]\n"
+                "download_password = \"choose-a-strong-password\"",
+                language="toml",
+            )
+            st.caption("Or set ADMIN_DOWNLOAD_PASSWORD in the environment.")
+        return False
+
+    if st.session_state.get(unlocked_key):
+        excel_bytes = to_excel_workbook_autofit(
+            build_management_breakdown_sheets(df_in, download_df)
+        )
+        download_clicked = st.download_button(
+            label=button_label,
+            data=excel_bytes,
+            file_name=file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"{key_prefix}_download_admin_excel",
+            use_container_width=True,
+        )
+
+        if st.button(
+            "Lock admin Excel",
+            key=f"{key_prefix}_lock_admin_excel",
+            use_container_width=True,
+        ):
+            st.session_state[unlocked_key] = False
+            st.rerun()
+
+        return bool(download_clicked)
+
+    with st.container(border=True):
+        st.caption("Admin password required for the management billing workbook.")
+        entered_password = st.text_input(
+            "Admin password",
+            type="password",
+            key=f"{key_prefix}_admin_excel_password",
+        )
+
+        if st.button(
+            "Unlock admin Excel",
+            key=f"{key_prefix}_unlock_admin_excel",
+            use_container_width=True,
+        ):
+            if hmac.compare_digest(entered_password, password):
+                st.session_state[unlocked_key] = True
+                st.rerun()
+
+            st.error("Incorrect admin password.")
+
+    return False
 
 
 def get_smtp_config() -> SmtpConfig | None:
@@ -415,6 +503,58 @@ def render_product_name_safety_section(
 
     return df_out
 
+
+def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
+    shipment_df, clothing_df, other_df = build_excel_breakdown(df_in)
+
+    st.subheader("Delivery breakdown")
+
+    shipment_cols = st.columns(4)
+    for col, row in zip(shipment_cols, shipment_df.itertuples(index=False)):
+        col.metric(row.Category, int(row.Count))
+
+    st.dataframe(
+        shipment_df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Category": st.column_config.TextColumn("Delivery type"),
+            "Count": st.column_config.NumberColumn("Orders", format="%d"),
+        },
+    )
+
+    st.subheader("Clothing breakdown")
+
+    clothing_cols = st.columns(3)
+    for index, row in enumerate(clothing_df.itertuples(index=False)):
+        clothing_cols[index % len(clothing_cols)].metric(row.Category, int(row.Count))
+
+    st.dataframe(
+        clothing_df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Category": st.column_config.TextColumn("Product type"),
+            "Count": st.column_config.NumberColumn("Items", format="%d"),
+        },
+    )
+
+    st.subheader("Other items")
+
+    if other_df.empty:
+        st.success("No other items found.")
+    else:
+        st.metric("Other item types", len(other_df))
+        st.dataframe(
+            other_df,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Item": st.column_config.TextColumn("Item"),
+                "Count": st.column_config.NumberColumn("Items", format="%d"),
+            },
+        )
+
 # ---------- Streamlit pages ----------
 
 def render_full_fulfilment_workflow():
@@ -544,7 +684,6 @@ def render_full_fulfilment_workflow():
 
     download_df = render_product_name_safety_section(df_out, key_prefix="fulfilment")
     csv_bytes = download_df.to_csv(index=False).encode("utf-8")
-    excel_bytes = to_excel_autofit(download_df)
     csv_name, xlsx_name = build_output_filenames()
 
     st.markdown("### Download Click & Drop file")
@@ -562,13 +701,12 @@ def render_full_fulfilment_workflow():
         )
 
     with col2:
-        st.download_button(
-            label="⬇️ Download Excel for checking",
-            data=excel_bytes,
+        render_admin_excel_download(
+            df_in=df_in,
+            download_df=download_df,
             file_name=xlsx_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_fulfilment_click_drop_xlsx",
-            use_container_width=True,
+            button_label="⬇️ Download Excel for checking",
+            key_prefix="fulfilment_click_drop_xlsx",
         )
 
     with st.expander("Preview formatted rows", expanded=False):
@@ -818,23 +956,31 @@ def render_formatting_page():
         )
         st.session_state["last_success_logged_for"] = success_key
 
-    st.subheader("Summary")
+    summary_tab, breakdown_tab, preview_tab = st.tabs(["Summary", "Excel Breakdown", "Preview"])
 
-    c0, c1, c2 = st.columns(3)
-    c0.metric("Orders", stats["total_orders"])
-    c1.metric("Products", stats["total_products"])
-    c2.metric("LBT", int(category_counts["LBT"]))
+    with summary_tab:
+        st.subheader("Summary")
 
-    c3, c4, c5 = st.columns(3)
-    c3.metric("Parcel", int(category_counts["Parcel"]))
-    c4.metric("Track24", int(category_counts["Track24"]))
-    c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
+        c0, c1, c2 = st.columns(3)
+        c0.metric("Orders", stats["total_orders"])
+        c1.metric("Products", stats["total_products"])
+        c2.metric("LBT", int(category_counts["LBT"]))
 
-    st.success("File processed successfully.")
+        c3, c4, c5 = st.columns(3)
+        c3.metric("Parcel", int(category_counts["Parcel"]))
+        c4.metric("Track24", int(category_counts["Track24"]))
+        c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
+
+        st.success("File processed successfully.")
+
+    with breakdown_tab:
+        render_excel_breakdown_tab(df_in)
+
+    with preview_tab:
+        st.dataframe(preview_df.head(20), width="stretch")
 
     download_df = render_product_name_safety_section(df_out, key_prefix="formatting")
     csv_bytes = download_df.to_csv(index=False).encode("utf-8")
-    excel_bytes = to_excel_autofit(download_df)
     csv_name, xlsx_name = build_output_filenames()
 
     st.subheader("Download Result")
@@ -868,13 +1014,12 @@ def render_formatting_page():
             )
 
     with col2:
-        xlsx_clicked = st.download_button(
-            label="⬇️ Download Excel (for checking)",
-            data=excel_bytes,
+        xlsx_clicked = render_admin_excel_download(
+            df_in=df_in,
+            download_df=download_df,
             file_name=xlsx_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_formatting_xlsx",
-            use_container_width=True,
+            button_label="⬇️ Download Excel (for checking)",
+            key_prefix="formatting_xlsx",
         )
         if xlsx_clicked:
             log_event(
@@ -893,9 +1038,6 @@ def render_formatting_page():
                 app_name=APP_NAME,
                 app_version=APP_VERSION,
             )
-
-    with st.expander("Preview formatted rows", expanded=False):
-        st.dataframe(preview_df.head(20), width="stretch")
 
 
 def render_add_tracking_page():
