@@ -7,7 +7,9 @@ from core.transform import (
     build_billing_details,
     build_management_breakdown_sheets,
     build_order_item_breakdown,
+    build_pricing_aid_details,
     get_product_name_length_issues,
+    has_back_add_on,
     parse_shortening_rules,
     product_name_length,
     transform_orders,
@@ -73,6 +75,22 @@ def test_build_excel_breakdown_counts_delivery_and_clothing_types():
     assert other_df.to_dict("records") == [{"Item": "Mug", "Count": 2}]
 
 
+def test_back_add_on_detection_counts_back_back_and_bk_markers():
+    df = base_df()
+    df.loc[0, "product"] = "TSHIRT-BLACK-M-Back-X1, TSHIRT-BLACK-L-BK-X2"
+    df.loc[1, "product"] = "TSHIRT-WHITE-S-BACK-X3; Mug"
+
+    _, _, other_df = build_excel_breakdown(df)
+    item_detail_df = build_order_item_breakdown(df)
+
+    assert has_back_add_on("TSHIRT-BLACK-M-Back-X1") is True
+    assert has_back_add_on("TSHIRT-BLACK-L-BK-X2") is True
+    assert has_back_add_on("TSHIRT-WHITE-S-BACK-X3") is True
+    assert has_back_add_on("TSHIRT-WHITE-S-FRONT-X3") is False
+    assert other_df.attrs["back_add_on_count"] == 3
+    assert int(item_detail_df["Back Add-on"].sum()) == 3
+
+
 def test_build_management_breakdown_sheets_include_summary_pricing_and_group_details():
     df = base_df()
     df.loc[0, "product"] = "Adult T-Shirt Black, Kids Hoodie Red, Mug"
@@ -95,6 +113,7 @@ def test_build_management_breakdown_sheets_include_summary_pricing_and_group_det
     assert sheets["Click Drop Output"].equals(click_drop_df)
     assert "Adult Shirts" in sheets
     assert "Other Items" in sheets
+    assert "Back Add-ons" in sheets
 
     summary_counts = {
         (row["Section"], row["Category"]): row["Count"]
@@ -149,6 +168,41 @@ def test_billing_charges_delivery_once_per_order_using_order_delivery_type():
     assert order_1001_rows[1]["Delivery Type"] == "LBT"
     assert order_1001_rows[1]["Order Delivery Type"] == "Parcel"
     assert order_1001_rows[1]["Shipping Price"] == 0
+
+
+def test_pricing_aid_uses_custom_prices_back_addons_others_and_one_delivery_per_order():
+    df = base_df()
+    df.loc[0, "product"] = "TSHIRT-BLACK-5XL-Back(S1), TSHIRT-RED-3/4-X3, Mug"
+
+    item_detail_df = build_order_item_breakdown(df)
+    pricing_df, summary_df = build_pricing_aid_details(
+        item_detail_df,
+        rates={
+            "adult_shirt_premium": 8.0,
+            "kids_shirt": 4.0,
+            "back_add_on": 2.0,
+            "Parcel": 3.5,
+            "Parcel24": 6.0,
+        },
+        other_item_prices={"Mug": 3.0},
+    )
+
+    order_1001_rows = pricing_df[pricing_df["Order Reference"] == "1001"].to_dict("records")
+    assert order_1001_rows[0]["Item Price"] == 8.0
+    assert order_1001_rows[0]["Back Add-on Price"] == 2.0
+    assert order_1001_rows[0]["Shipping Price"] == 3.5
+    assert order_1001_rows[0]["Line Total"] == 13.5
+    assert order_1001_rows[1]["Item Price"] == 4.0
+    assert order_1001_rows[1]["Shipping Price"] == 0.0
+    assert order_1001_rows[2]["Product Group"] == "Other items"
+    assert order_1001_rows[2]["Item Price"] == 3.0
+
+    summary = dict(zip(summary_df["Category"], summary_df["Amount"]))
+    assert summary["Product subtotal"] == 30.5
+    assert summary["Back add-ons"] == 2.0
+    assert summary["Delivery"] == 9.5
+    assert summary["Total"] == 42.0
+    assert summary["Unpriced other items"] == 0
 
 
 def test_billing_details_adds_item_shipping_and_total_formulas():

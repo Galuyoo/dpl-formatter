@@ -277,6 +277,21 @@ BILLING_DELIVERY_PRICES = {
 ADULT_SHIRT_STANDARD_PRICE = 5.5
 ADULT_SHIRT_PREMIUM_PRICE = 7.5
 ADULT_SHIRT_PREMIUM_SIZE_TOKENS = {"5XL", "6XL"}
+DEFAULT_PRICING_AID_RATES = {
+    "adult_shirt_standard": ADULT_SHIRT_STANDARD_PRICE,
+    "adult_shirt_premium": ADULT_SHIRT_PREMIUM_PRICE,
+    "kids_shirt": BILLING_ITEM_PRICES["Kids Shirts"],
+    "adult_jumper": BILLING_ITEM_PRICES["Adult Jumper/Sweatshirt"],
+    "kids_jumper": BILLING_ITEM_PRICES["Kids Jumper/Sweatshirt"],
+    "adult_hoodie": BILLING_ITEM_PRICES["Adult Hoodies"],
+    "kids_hoodie": BILLING_ITEM_PRICES["Kids Hoodies"],
+    "back_add_on": 0.0,
+    "LBT": BILLING_DELIVERY_PRICES["LBT"],
+    "Parcel": BILLING_DELIVERY_PRICES["Parcel"],
+    "Track24": BILLING_DELIVERY_PRICES["Track24"],
+    "Parcel24": BILLING_DELIVERY_PRICES["Parcel24"],
+}
+BACK_ADD_ON_PATTERN = re.compile(r"(?<![A-Z0-9])(?:BACK|BK)(?![A-Z0-9])", re.IGNORECASE)
 
 DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT = """TSHIRT => T
 HEATHER GREY => HG
@@ -383,9 +398,13 @@ def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame,
 
     clothing_counts = {label: 0 for label in CLOTHING_BREAKDOWN_LABELS}
     other_counts = {}
+    back_add_on_count = 0
 
     for product in working_df["product"]:
         for item in split_product_items(product):
+            if has_back_add_on(item):
+                back_add_on_count += 1
+
             clothing_type = classify_clothing_item(item)
             if clothing_type:
                 clothing_counts[clothing_type] += 1
@@ -411,6 +430,7 @@ def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame,
         ],
         columns=["Item", "Count"],
     )
+    other_df.attrs["back_add_on_count"] = back_add_on_count
 
     return shipment_df, clothing_df, other_df
 
@@ -419,6 +439,13 @@ def get_delivery_breakdown_label(category: str) -> str:
     if category == "TrackParcel":
         return "Parcel24"
     return category
+
+
+def has_back_add_on(product_item: str) -> bool:
+    if not isinstance(product_item, str):
+        return False
+
+    return bool(BACK_ADD_ON_PATTERN.search(product_item))
 
 
 def get_item_delivery_type(row: pd.Series, item: str) -> str:
@@ -448,6 +475,7 @@ def build_order_item_breakdown(df: pd.DataFrame) -> pd.DataFrame:
                     "Order Delivery Type": order_delivery_type,
                     "Product Group": product_group,
                     "Product Item": item,
+                    "Back Add-on": has_back_add_on(item),
                     "Full Product": product,
                 }
             )
@@ -464,6 +492,7 @@ def build_order_item_breakdown(df: pd.DataFrame) -> pd.DataFrame:
             "Order Delivery Type",
             "Product Group",
             "Product Item",
+            "Back Add-on",
             "Full Product",
         ],
     )
@@ -480,6 +509,127 @@ def get_billing_item_price(product_group: str, product_item: str) -> float | Non
         return BILLING_ITEM_PRICES[product_group]
 
     return None
+
+
+def get_pricing_aid_item_price(
+    product_group: str,
+    product_item: str,
+    rates: dict[str, float] | None = None,
+    other_item_prices: dict[str, float] | None = None,
+) -> float | None:
+    active_rates = {**DEFAULT_PRICING_AID_RATES, **(rates or {})}
+    active_other_prices = other_item_prices or {}
+
+    if product_group == "Adult Shirts":
+        item_size_tokens = set(extract_size_tokens(product_item))
+        if item_size_tokens & ADULT_SHIRT_PREMIUM_SIZE_TOKENS:
+            return active_rates["adult_shirt_premium"]
+        return active_rates["adult_shirt_standard"]
+
+    group_rate_keys = {
+        "Kids Shirts": "kids_shirt",
+        "Adult Jumper/Sweatshirt": "adult_jumper",
+        "Kids Jumper/Sweatshirt": "kids_jumper",
+        "Adult Hoodies": "adult_hoodie",
+        "Kids Hoodies": "kids_hoodie",
+    }
+
+    if product_group in group_rate_keys:
+        return active_rates[group_rate_keys[product_group]]
+
+    if product_group == "Other items":
+        return active_other_prices.get(product_item)
+
+    return None
+
+
+def build_pricing_aid_details(
+    item_detail_df: pd.DataFrame,
+    rates: dict[str, float] | None = None,
+    other_item_prices: dict[str, float] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    active_rates = {**DEFAULT_PRICING_AID_RATES, **(rates or {})}
+    active_other_prices = other_item_prices or {}
+    rows = []
+    charged_order_rows = set()
+
+    for line_number, row in enumerate(item_detail_df.to_dict("records"), start=1):
+        item_price = get_pricing_aid_item_price(
+            row["Product Group"],
+            row["Product Item"],
+            active_rates,
+            active_other_prices,
+        )
+        back_add_on_price = active_rates["back_add_on"] if row["Back Add-on"] else 0.0
+        order_row = row["Order Row"]
+        is_first_item_for_order = order_row not in charged_order_rows
+        shipping_price = active_rates.get(row["Order Delivery Type"], 0.0) if is_first_item_for_order else 0.0
+        charged_order_rows.add(order_row)
+        is_priced = item_price is not None
+        line_total = (item_price + back_add_on_price + shipping_price) if is_priced else None
+
+        rows.append(
+            {
+                "Line": line_number,
+                "Order Reference": row["Order Reference"],
+                "Customer Name": row["Customer Name"],
+                "Delivery Type": row["Delivery Type"],
+                "Order Delivery Type": row["Order Delivery Type"],
+                "Product Group": row["Product Group"],
+                "Product Item": row["Product Item"],
+                "Back Add-on": row["Back Add-on"],
+                "Item Price": item_price,
+                "Back Add-on Price": back_add_on_price,
+                "Shipping Price": shipping_price,
+                "Line Total": line_total,
+                "Pricing Status": "Priced" if is_priced else "Needs other item price",
+            }
+        )
+
+    details_df = pd.DataFrame(
+        rows,
+        columns=[
+            "Line",
+            "Order Reference",
+            "Customer Name",
+            "Delivery Type",
+            "Order Delivery Type",
+            "Product Group",
+            "Product Item",
+            "Back Add-on",
+            "Item Price",
+            "Back Add-on Price",
+            "Shipping Price",
+            "Line Total",
+            "Pricing Status",
+        ],
+    )
+
+    if details_df.empty:
+        summary_rows = [
+            {"Category": "Product subtotal", "Amount": 0.0},
+            {"Category": "Back add-ons", "Amount": 0.0},
+            {"Category": "Delivery", "Amount": 0.0},
+            {"Category": "Total", "Amount": 0.0},
+            {"Category": "Unpriced other items", "Amount": 0},
+        ]
+    else:
+        priced_details = details_df[details_df["Item Price"].notna()]
+        product_subtotal = float(priced_details["Item Price"].sum())
+        back_add_on_subtotal = float(details_df["Back Add-on Price"].sum())
+        delivery_subtotal = float(details_df["Shipping Price"].sum())
+        summary_rows = [
+            {"Category": "Product subtotal", "Amount": product_subtotal},
+            {"Category": "Back add-ons", "Amount": back_add_on_subtotal},
+            {"Category": "Delivery", "Amount": delivery_subtotal},
+            {"Category": "Total", "Amount": product_subtotal + back_add_on_subtotal + delivery_subtotal},
+            {
+                "Category": "Unpriced other items",
+                "Amount": int((details_df["Pricing Status"] == "Needs other item price").sum()),
+            },
+        ]
+
+    return details_df, pd.DataFrame(summary_rows, columns=["Category", "Amount"])
 
 
 def build_billing_details(item_detail_df: pd.DataFrame) -> pd.DataFrame:
@@ -576,11 +726,13 @@ def build_management_breakdown_sheets(
     total_orders = len(df_in)
     total_items = len(item_detail_df)
     other_item_count = int(other_df["Count"].sum()) if not other_df.empty else 0
+    back_add_on_count = int(item_detail_df["Back Add-on"].sum()) if not item_detail_df.empty else 0
 
     summary_rows = [
         {"Section": "Overall", "Category": "Total orders", "Count": int(total_orders)},
         {"Section": "Overall", "Category": "Total items", "Count": int(total_items)},
         {"Section": "Overall", "Category": "Other items", "Count": other_item_count},
+        {"Section": "Overall", "Category": "Back add-ons", "Count": back_add_on_count},
     ]
     summary_rows.extend(
         {"Section": "Delivery", "Category": row.Category, "Count": int(row.Count)}
@@ -659,6 +811,7 @@ def build_management_breakdown_sheets(
         "Product Breakdown": clothing_df,
         "Other Item Summary": other_df,
         "All Order Items": item_detail_df,
+        "Back Add-ons": item_detail_df[item_detail_df["Back Add-on"]].copy(),
         "Click Drop Output": click_drop_df,
     }
 

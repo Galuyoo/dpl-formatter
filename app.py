@@ -17,10 +17,13 @@ from core.file_io import (
 from core.tracking import add_tracking_column_from_labels, extract_label_pages
 from core.transform import (
     DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT,
+    DEFAULT_PRICING_AID_RATES,
     PRODUCT_NAME_WARNING_LIMIT,
     apply_product_name_rules_to_df,
     build_excel_breakdown,
     build_management_breakdown_sheets,
+    build_order_item_breakdown,
+    build_pricing_aid_details,
     get_product_name_length_issues,
     parse_shortening_rules,
     transform_orders,
@@ -506,36 +509,233 @@ def render_product_name_safety_section(
 
 def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
     shipment_df, clothing_df, other_df = build_excel_breakdown(df_in)
+    item_detail_df = build_order_item_breakdown(df_in)
 
-    st.subheader("Delivery breakdown")
+    st.subheader("Details")
 
-    shipment_cols = st.columns(4)
-    for col, row in zip(shipment_cols, shipment_df.itertuples(index=False)):
-        col.metric(row.Category, int(row.Count))
+    detail_cols = st.columns(4)
+    order_count = int(df_in["order reference"].nunique()) if "order reference" in df_in.columns else len(df_in)
+    detail_cols[0].metric("Orders", order_count)
+    detail_cols[1].metric("Items", len(item_detail_df))
+    detail_cols[2].metric("Other item types", len(other_df))
+    detail_cols[3].metric("Back add-ons", int(other_df.attrs.get("back_add_on_count", 0)))
 
+    breakdown_left, breakdown_right = st.columns(2)
+
+    with breakdown_left:
+        st.markdown("**Delivery breakdown**")
+        shipment_cols = st.columns(2)
+        for index, row in enumerate(shipment_df.itertuples(index=False)):
+            shipment_cols[index % len(shipment_cols)].metric(row.Category, int(row.Count))
+
+        st.dataframe(
+            shipment_df,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Category": st.column_config.TextColumn("Delivery type"),
+                "Count": st.column_config.NumberColumn("Orders", format="%d"),
+            },
+        )
+
+    with breakdown_right:
+        st.markdown("**Clothing breakdown**")
+        clothing_cols = st.columns(2)
+        for index, row in enumerate(clothing_df.itertuples(index=False)):
+            clothing_cols[index % len(clothing_cols)].metric(row.Category, int(row.Count))
+
+        st.dataframe(
+            clothing_df,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Category": st.column_config.TextColumn("Product type"),
+                "Count": st.column_config.NumberColumn("Items", format="%d"),
+            },
+        )
+
+    st.subheader("Pricing aider")
+
+    price_cols = st.columns(3)
+    with price_cols[0]:
+        adult_shirt_standard = st.number_input(
+            "Adult Shirt up to 4XL",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["adult_shirt_standard"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_adult_shirt_standard",
+        )
+        adult_shirt_premium = st.number_input(
+            "Adult Shirt 5XL/6XL",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["adult_shirt_premium"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_adult_shirt_premium",
+        )
+        kids_shirt = st.number_input(
+            "Kids Shirt",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["kids_shirt"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_kids_shirt",
+        )
+        back_add_on = st.number_input(
+            "Back add-on",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["back_add_on"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_back_add_on",
+        )
+
+    with price_cols[1]:
+        adult_jumper = st.number_input(
+            "Adult Jumper/Sweatshirt",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["adult_jumper"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_adult_jumper",
+        )
+        kids_jumper = st.number_input(
+            "Kids Jumper/Sweatshirt",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["kids_jumper"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_kids_jumper",
+        )
+        adult_hoodie = st.number_input(
+            "Adult Hoodie",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["adult_hoodie"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_adult_hoodie",
+        )
+        kids_hoodie = st.number_input(
+            "Kids Hoodie",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["kids_hoodie"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_kids_hoodie",
+        )
+
+    with price_cols[2]:
+        lbt_price = st.number_input(
+            "LBT",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["LBT"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_lbt",
+        )
+        parcel_price = st.number_input(
+            "Parcel",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["Parcel"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_parcel",
+        )
+        track24_price = st.number_input(
+            "Track24",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["Track24"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_track24",
+        )
+        parcel24_price = st.number_input(
+            "Parcel24",
+            min_value=0.0,
+            value=float(DEFAULT_PRICING_AID_RATES["Parcel24"]),
+            step=0.1,
+            format="%.2f",
+            key="pricing_aid_parcel24",
+        )
+
+    other_item_prices = {}
+
+    if other_df.empty:
+        st.success("No other items found.")
+    else:
+        st.markdown("**Other item prices**")
+        other_pricing_df = other_df.copy()
+        other_pricing_df["Unit Price"] = None
+        edited_other_pricing_df = st.data_editor(
+            other_pricing_df,
+            width="stretch",
+            hide_index=True,
+            key="pricing_aid_other_item_prices",
+            disabled=["Item", "Count"],
+            column_config={
+                "Item": st.column_config.TextColumn("Item"),
+                "Count": st.column_config.NumberColumn("Items", format="%d"),
+                "Unit Price": st.column_config.NumberColumn("Unit Price", min_value=0.0, step=0.1, format="£%.2f"),
+            },
+        )
+        for row in edited_other_pricing_df.to_dict("records"):
+            unit_price = row.get("Unit Price")
+            if pd.notna(unit_price):
+                other_item_prices[row["Item"]] = float(unit_price)
+
+    pricing_rates = {
+        "adult_shirt_standard": adult_shirt_standard,
+        "adult_shirt_premium": adult_shirt_premium,
+        "kids_shirt": kids_shirt,
+        "adult_jumper": adult_jumper,
+        "kids_jumper": kids_jumper,
+        "adult_hoodie": adult_hoodie,
+        "kids_hoodie": kids_hoodie,
+        "back_add_on": back_add_on,
+        "LBT": lbt_price,
+        "Parcel": parcel_price,
+        "Track24": track24_price,
+        "Parcel24": parcel24_price,
+    }
+    pricing_detail_df, pricing_summary_df = build_pricing_aid_details(
+        item_detail_df,
+        rates=pricing_rates,
+        other_item_prices=other_item_prices,
+    )
+    pricing_summary = dict(zip(pricing_summary_df["Category"], pricing_summary_df["Amount"]))
+
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Total", f"£{pricing_summary.get('Total', 0):,.2f}")
+    summary_cols[1].metric("Products", f"£{pricing_summary.get('Product subtotal', 0):,.2f}")
+    summary_cols[2].metric("Back add-ons", f"£{pricing_summary.get('Back add-ons', 0):,.2f}")
+    summary_cols[3].metric("Delivery", f"£{pricing_summary.get('Delivery', 0):,.2f}")
+    unpriced_other_items = int(pricing_summary.get("Unpriced other items", 0))
+    if unpriced_other_items:
+        st.warning(f"{unpriced_other_items} other item(s) still need a price.")
+
+    pricing_money_summary_df = pricing_summary_df[pricing_summary_df["Category"] != "Unpriced other items"]
     st.dataframe(
-        shipment_df,
+        pricing_money_summary_df,
         width="stretch",
         hide_index=True,
         column_config={
-            "Category": st.column_config.TextColumn("Delivery type"),
-            "Count": st.column_config.NumberColumn("Orders", format="%d"),
+            "Category": st.column_config.TextColumn("Category"),
+            "Amount": st.column_config.NumberColumn("Amount", format="£%.2f"),
         },
     )
 
-    st.subheader("Clothing breakdown")
-
-    clothing_cols = st.columns(3)
-    for index, row in enumerate(clothing_df.itertuples(index=False)):
-        clothing_cols[index % len(clothing_cols)].metric(row.Category, int(row.Count))
-
     st.dataframe(
-        clothing_df,
+        pricing_detail_df,
         width="stretch",
         hide_index=True,
         column_config={
-            "Category": st.column_config.TextColumn("Product type"),
-            "Count": st.column_config.NumberColumn("Items", format="%d"),
+            "Line": st.column_config.NumberColumn("Line", format="%d"),
+            "Back Add-on": st.column_config.CheckboxColumn("Back Add-on"),
+            "Item Price": st.column_config.NumberColumn("Item Price", format="£%.2f"),
+            "Back Add-on Price": st.column_config.NumberColumn("Back Add-on Price", format="£%.2f"),
+            "Shipping Price": st.column_config.NumberColumn("Shipping Price", format="£%.2f"),
+            "Line Total": st.column_config.NumberColumn("Line Total", format="£%.2f"),
         },
     )
 
@@ -544,7 +744,6 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
     if other_df.empty:
         st.success("No other items found.")
     else:
-        st.metric("Other item types", len(other_df))
         st.dataframe(
             other_df,
             width="stretch",
@@ -956,7 +1155,7 @@ def render_formatting_page():
         )
         st.session_state["last_success_logged_for"] = success_key
 
-    summary_tab, breakdown_tab, preview_tab = st.tabs(["Summary", "Excel Breakdown", "Preview"])
+    summary_tab, breakdown_tab, preview_tab = st.tabs(["Summary", "Details & Pricing", "Preview"])
 
     with summary_tab:
         st.subheader("Summary")
