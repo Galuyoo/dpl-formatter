@@ -86,6 +86,7 @@ def test_unclear_clothing_without_size_or_age_signal_goes_to_other_items():
 
 def test_kids_size_tokens_detect_childrens_shirts_without_kids_word():
     assert classify_clothing_item("TSHIRT-RED-3/4-FR+BK-X5") == "Kids Shirts"
+    assert classify_clothing_item("TSHIRT-TF14-Navy-5-6YRS (S7)") == "Kids Shirts"
     assert classify_clothing_item("TSHIRT-WHITE-7/8-X10") == "Kids Shirts"
     assert classify_clothing_item("TSHIRT-HOTPINK-9/10-FR+BK-X4") == "Kids Shirts"
     assert classify_clothing_item("TSHIRT-TF136-Black-9/11 Yrs-Front(S630)-Back(S631)") == "Kids Shirts"

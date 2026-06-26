@@ -13,7 +13,23 @@ from core.config import (
 from core.normalization import normalize_text
 
 ADULT_SIZE_TOKENS = {"XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL", "6XL"}
-KIDS_SIZE_TOKENS = {"2", "3/4", "5/6", "7/8", "9/10", "9/11", "11/13", "12/13", "12-13"}
+KIDS_SIZE_TOKENS = {
+    "2",
+    "3/4",
+    "3-4",
+    "5/6",
+    "5-6",
+    "7/8",
+    "7-8",
+    "9/10",
+    "9-10",
+    "9/11",
+    "9-11",
+    "11/13",
+    "11-13",
+    "12/13",
+    "12-13",
+}
 ADULT_WORD_PATTERNS = [
     r"\bADULT\b",
     r"\bMENS?\b",
@@ -42,7 +58,7 @@ ADULT_SIZE_PATTERN = re.compile(
 )
 KIDS_SIZE_PATTERN = re.compile(
     r"(?<![A-Z0-9])"
-    r"(?:2|3/4|5/6|7/8|9/10|9/11|11/13|12/13|12-13)"
+    r"(?:2|3[/-]4|5[/-]6|7[/-]8|9[/-]10|9[/-]11|11[/-]13|12[/-]13)"
     r"(?:\s*(?:YEARS?|YRS?|YR|Y))?"
     r"(?![A-Z0-9])"
 )
