@@ -513,21 +513,33 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
 
     st.subheader("Details")
 
-    detail_cols = st.columns(4)
     order_count = int(df_in["order reference"].nunique()) if "order reference" in df_in.columns else len(df_in)
-    detail_cols[0].metric("Orders", order_count)
-    detail_cols[1].metric("Items", len(item_detail_df))
-    detail_cols[2].metric("Other item types", len(other_df))
-    detail_cols[3].metric("Back add-ons", int(other_df.attrs.get("back_add_on_count", 0)))
+    overview_df = pd.DataFrame(
+        [
+            {
+                "Orders": order_count,
+                "Items": len(item_detail_df),
+                "Other item types": len(other_df),
+                "Back add-ons": int(other_df.attrs.get("back_add_on_count", 0)),
+            }
+        ]
+    )
+    st.dataframe(
+        overview_df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Orders": st.column_config.NumberColumn("Orders", format="%d"),
+            "Items": st.column_config.NumberColumn("Items", format="%d"),
+            "Other item types": st.column_config.NumberColumn("Other item types", format="%d"),
+            "Back add-ons": st.column_config.NumberColumn("Back add-ons", format="%d"),
+        },
+    )
 
     breakdown_left, breakdown_right = st.columns(2)
 
     with breakdown_left:
         st.markdown("**Delivery breakdown**")
-        shipment_cols = st.columns(2)
-        for index, row in enumerate(shipment_df.itertuples(index=False)):
-            shipment_cols[index % len(shipment_cols)].metric(row.Category, int(row.Count))
-
         st.dataframe(
             shipment_df,
             width="stretch",
@@ -540,10 +552,6 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
 
     with breakdown_right:
         st.markdown("**Clothing breakdown**")
-        clothing_cols = st.columns(2)
-        for index, row in enumerate(clothing_df.itertuples(index=False)):
-            clothing_cols[index % len(clothing_cols)].metric(row.Category, int(row.Count))
-
         st.dataframe(
             clothing_df,
             width="stretch",
