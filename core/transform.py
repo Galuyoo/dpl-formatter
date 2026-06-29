@@ -252,6 +252,8 @@ CLOTHING_BREAKDOWN_LABELS = [
     "Kids Hoodies",
     "Adult Hoodies",
 ]
+SPECIAL_ITEM_GROUP_LABELS = ["RL100"]
+PRODUCT_BREAKDOWN_LABELS = CLOTHING_BREAKDOWN_LABELS + SPECIAL_ITEM_GROUP_LABELS
 PRODUCT_GROUP_SHEET_NAMES = {
     "Adult Shirts": "Adult Shirts",
     "Kids Shirts": "Kids Shirts",
@@ -259,6 +261,7 @@ PRODUCT_GROUP_SHEET_NAMES = {
     "Kids Jumper/Sweatshirt": "Kids Jumpers",
     "Kids Hoodies": "Kids Hoodies",
     "Adult Hoodies": "Adult Hoodies",
+    "RL100": "RL100",
     "Other items": "Other Items",
 }
 BILLING_ITEM_PRICES = {
@@ -292,6 +295,7 @@ DEFAULT_PRICING_AID_RATES = {
     "Parcel24": BILLING_DELIVERY_PRICES["Parcel24"],
 }
 BACK_ADD_ON_PATTERN = re.compile(r"(?<![A-Z0-9])(?:BACK|BK)(?![A-Z0-9])", re.IGNORECASE)
+RL100_PATTERN = re.compile(r"(?<![A-Z0-9])RL100(?![A-Z0-9])", re.IGNORECASE)
 
 DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT = """TSHIRT => T
 HEATHER GREY => HG
@@ -384,6 +388,20 @@ def get_product_name_length_issues(df: pd.DataFrame, limit: int = PRODUCT_NAME_W
     return pd.DataFrame(rows)
 
 
+def classify_special_item(product_item: str) -> str | None:
+    if not isinstance(product_item, str):
+        return None
+
+    if RL100_PATTERN.search(product_item):
+        return "RL100"
+
+    return None
+
+
+def classify_product_group(product_item: str) -> str:
+    return classify_clothing_item(product_item) or classify_special_item(product_item) or "Other items"
+
+
 def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     working_df = df.copy()
     working_df["__Tracked"] = working_df.apply(get_row_tracked_flag, axis=1)
@@ -396,7 +414,7 @@ def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame,
         .reindex(SHIPMENT_BREAKDOWN_LABELS, fill_value=0)
     )
 
-    clothing_counts = {label: 0 for label in CLOTHING_BREAKDOWN_LABELS}
+    product_counts = {label: 0 for label in PRODUCT_BREAKDOWN_LABELS}
     other_counts = {}
     back_add_on_count = 0
 
@@ -405,9 +423,9 @@ def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame,
             if has_back_add_on(item):
                 back_add_on_count += 1
 
-            clothing_type = classify_clothing_item(item)
-            if clothing_type:
-                clothing_counts[clothing_type] += 1
+            product_group = classify_product_group(item)
+            if product_group != "Other items":
+                product_counts[product_group] += 1
             else:
                 other_counts[item] = other_counts.get(item, 0) + 1
 
@@ -419,8 +437,8 @@ def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame,
     )
     clothing_df = pd.DataFrame(
         {
-            "Category": CLOTHING_BREAKDOWN_LABELS,
-            "Count": [int(clothing_counts[label]) for label in CLOTHING_BREAKDOWN_LABELS],
+            "Category": PRODUCT_BREAKDOWN_LABELS,
+            "Count": [int(product_counts[label]) for label in PRODUCT_BREAKDOWN_LABELS],
         }
     )
     other_df = pd.DataFrame(
@@ -462,7 +480,7 @@ def build_order_item_breakdown(df: pd.DataFrame) -> pd.DataFrame:
         order_delivery_type = get_delivery_breakdown_label(classify_row(row))
 
         for item in split_product_items(product):
-            product_group = classify_clothing_item(item) or "Other items"
+            product_group = classify_product_group(item)
             item_delivery_type = get_item_delivery_type(row, item)
             rows.append(
                 {
@@ -537,7 +555,7 @@ def get_pricing_aid_item_price(
     if product_group in group_rate_keys:
         return active_rates[group_rate_keys[product_group]]
 
-    if product_group == "Other items":
+    if product_group in {"Other items", "RL100"}:
         return active_other_prices.get(product_item)
 
     return None
@@ -611,7 +629,7 @@ def build_pricing_aid_details(
             {"Category": "Back add-ons", "Amount": 0.0},
             {"Category": "Delivery", "Amount": 0.0},
             {"Category": "Total", "Amount": 0.0},
-            {"Category": "Unpriced other items", "Amount": 0},
+            {"Category": "Unpriced manual items", "Amount": 0},
         ]
     else:
         priced_details = details_df[details_df["Item Price"].notna()]
@@ -624,7 +642,7 @@ def build_pricing_aid_details(
             {"Category": "Delivery", "Amount": delivery_subtotal},
             {"Category": "Total", "Amount": product_subtotal + back_add_on_subtotal + delivery_subtotal},
             {
-                "Category": "Unpriced other items",
+                "Category": "Unpriced manual items",
                 "Amount": int((details_df["Pricing Status"] == "Needs other item price").sum()),
             },
         ]

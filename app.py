@@ -551,7 +551,7 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
         )
 
     with breakdown_right:
-        st.markdown("**Clothing breakdown**")
+        st.markdown("**Product breakdown**")
         st.dataframe(
             clothing_df,
             width="stretch",
@@ -668,21 +668,30 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
         )
 
     other_item_prices = {}
+    manual_price_df = item_detail_df[
+        item_detail_df["Product Group"].isin(["Other items", "RL100"])
+    ].copy()
 
-    if other_df.empty:
-        st.success("No other items found.")
+    if manual_price_df.empty:
+        st.success("No manual item prices needed.")
     else:
-        st.markdown("**Other item prices**")
-        other_pricing_df = other_df.copy()
+        st.markdown("**Manual item prices**")
+        other_pricing_df = (
+            manual_price_df.groupby(["Product Group", "Product Item"], dropna=False)
+            .size()
+            .reset_index(name="Count")
+            .sort_values(["Product Group", "Product Item"])
+        )
         other_pricing_df["Unit Price"] = None
         edited_other_pricing_df = st.data_editor(
             other_pricing_df,
             width="stretch",
             hide_index=True,
             key="pricing_aid_other_item_prices",
-            disabled=["Item", "Count"],
+            disabled=["Product Group", "Product Item", "Count"],
             column_config={
-                "Item": st.column_config.TextColumn("Item"),
+                "Product Group": st.column_config.TextColumn("Product group"),
+                "Product Item": st.column_config.TextColumn("Item"),
                 "Count": st.column_config.NumberColumn("Items", format="%d"),
                 "Unit Price": st.column_config.NumberColumn("Unit Price", min_value=0.0, step=0.1, format="£%.2f"),
             },
@@ -690,7 +699,7 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
         for row in edited_other_pricing_df.to_dict("records"):
             unit_price = row.get("Unit Price")
             if pd.notna(unit_price):
-                other_item_prices[row["Item"]] = float(unit_price)
+                other_item_prices[row["Product Item"]] = float(unit_price)
 
     pricing_rates = {
         "adult_shirt_standard": adult_shirt_standard,
@@ -718,11 +727,11 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
     summary_cols[1].metric("Products", f"£{pricing_summary.get('Product subtotal', 0):,.2f}")
     summary_cols[2].metric("Back add-ons", f"£{pricing_summary.get('Back add-ons', 0):,.2f}")
     summary_cols[3].metric("Delivery", f"£{pricing_summary.get('Delivery', 0):,.2f}")
-    unpriced_other_items = int(pricing_summary.get("Unpriced other items", 0))
+    unpriced_other_items = int(pricing_summary.get("Unpriced manual items", 0))
     if unpriced_other_items:
-        st.warning(f"{unpriced_other_items} other item(s) still need a price.")
+        st.warning(f"{unpriced_other_items} manual item(s) still need a price.")
 
-    pricing_money_summary_df = pricing_summary_df[pricing_summary_df["Category"] != "Unpriced other items"]
+    pricing_money_summary_df = pricing_summary_df[pricing_summary_df["Category"] != "Unpriced manual items"]
     st.dataframe(
         pricing_money_summary_df,
         width="stretch",
