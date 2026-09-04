@@ -186,6 +186,10 @@ def is_lbt_product(product: str) -> bool:
 
 
 def classify_row(row: pd.Series) -> str:
+    source_category = str(row.get("shipping category", "") or "").strip()
+    if source_category in {"LBT", "Parcel", "Track24", "TrackParcel"}:
+        return source_category
+
     product = row.get("product", "")
     is_tracked = get_row_tracked_flag(row)
     is_lbt = is_lbt_product(product)
