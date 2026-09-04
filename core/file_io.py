@@ -7,6 +7,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from core.normalization import normalize_column_name
+from core.order_export import is_storefeeder_order_export, normalize_storefeeder_order_export
 
 
 def load_input_file(uploaded_file) -> pd.DataFrame:
@@ -20,6 +21,10 @@ def load_input_file(uploaded_file) -> pd.DataFrame:
         raise ValueError("File type not supported. Use CSV or Excel (.csv, .xlsx, .xls).")
 
     df.columns = [normalize_column_name(col) for col in df.columns]
+
+    if is_storefeeder_order_export(df):
+        df = normalize_storefeeder_order_export(df)
+
     return df
 
 
