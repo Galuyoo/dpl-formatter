@@ -43,6 +43,20 @@ def _parse_quantity(value) -> int:
     return max(1, quantity)
 
 
+def _join_address_parts(*parts) -> str:
+    cleaned_parts = []
+    seen = set()
+
+    for part in parts:
+        cleaned = _clean_value(part)
+        key = cleaned.upper()
+        if cleaned and key not in seen:
+            cleaned_parts.append(cleaned)
+            seen.add(key)
+
+    return ", ".join(cleaned_parts)
+
+
 def shipping_method_to_category(value) -> str:
     """Map StoreFeeder Royal Mail service names to the app's shipping categories."""
     method = re.sub(r"\s+", " ", _clean_value(value).upper())
@@ -116,17 +130,27 @@ def normalize_storefeeder_order_export(df: pd.DataFrame) -> pd.DataFrame:
         if not product_items:
             raise ValueError(f"Order {order_key} has no SKU or Product Name to process.")
 
+        source_address_2 = _first_nonblank(group["shipping address 2"])
+        county = _first_nonblank(group["shipping address 4"])
+        country = _first_nonblank(group["shipping country"])
+        is_uk = country.upper() in {"UNITED KINGDOM", "UK", "GB", "GREAT BRITAIN"}
+        address_2 = _join_address_parts(
+            source_address_2,
+            county,
+            "" if is_uk else country,
+        )
+
         records.append(
             {
                 "order reference": _clean_value(order_key),
                 "product": " , ".join(product_items),
                 "name": _first_nonblank(group["shipping name"]),
                 "address 1": _first_nonblank(group["shipping address 1"]),
-                "address 2": _first_nonblank(group["shipping address 2"]),
+                "address 2": address_2,
                 "city": _first_nonblank(group["shipping address 3"]),
-                "county": _first_nonblank(group["shipping address 4"]),
+                "county": county,
                 "postcode": _first_nonblank(group["shipping address 5"]),
-                "country": _first_nonblank(group["shipping country"]),
+                "country": country,
                 "tracked 24": (
                     "Tracked 24" if shipping_category in {"Track24", "TrackParcel"} else ""
                 ),
