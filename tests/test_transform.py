@@ -66,6 +66,7 @@ def test_build_excel_breakdown_counts_delivery_and_clothing_types():
     }
     assert dict(zip(clothing_df["Category"], clothing_df["Count"])) == {
         "Adult Shirts": 1,
+        "Adult Shirts 5XL/6XL": 0,
         "Kids Shirts": 1,
         "Adult Jumper/Sweatshirt": 1,
         "Kids Jumper/Sweatshirt": 0,
@@ -142,6 +143,26 @@ def test_build_management_breakdown_sheets_include_summary_pricing_and_group_det
 
     other_orders = sheets["Other Items"]
     assert other_orders["Product Item"].tolist() == ["Mug", "Mug"]
+
+
+def test_adult_5xl_and_6xl_shirts_have_a_combined_premium_count():
+    df = base_df()
+    df.loc[0, "product"] = "Adult T-Shirt Black 5XL, Adult T-Shirt Navy 6XL, Adult T-Shirt White XL"
+    _, click_drop_df, _ = transform_orders(df)
+
+    _, product_df, _ = build_excel_breakdown(df)
+    product_counts = dict(zip(product_df["Category"], product_df["Count"]))
+
+    assert product_counts["Adult Shirts"] == 3
+    assert product_counts["Adult Shirts 5XL/6XL"] == 2
+
+    sheets = build_management_breakdown_sheets(df, click_drop_df)
+    summary_counts = {
+        (row["Section"], row["Category"]): row["Count"]
+        for row in sheets["Summary"].to_dict("records")
+    }
+    assert summary_counts[("Product", "Adult Shirts 5XL/6XL")] == 2
+    assert "Adult Shirts 5XL/6XL" not in sheets["Pricing Template"]["Category"].tolist()
 
 
 def test_order_item_breakdown_prices_kids_shirt_as_lbt_inside_multi_item_order():

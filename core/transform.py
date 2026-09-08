@@ -247,6 +247,7 @@ PRODUCT_NAME_WARNING_LIMIT = 95
 SHIPMENT_BREAKDOWN_LABELS = ["LBT", "Parcel", "Track24", "Parcel24"]
 CLOTHING_BREAKDOWN_LABELS = [
     "Adult Shirts",
+    "Adult Shirts 5XL/6XL",
     "Kids Shirts",
     "Adult Jumper/Sweatshirt",
     "Kids Jumper/Sweatshirt",
@@ -282,6 +283,7 @@ BILLING_DELIVERY_PRICES = {
 ADULT_SHIRT_STANDARD_PRICE = 5.5
 ADULT_SHIRT_PREMIUM_PRICE = 7.5
 ADULT_SHIRT_PREMIUM_SIZE_TOKENS = {"5XL", "6XL"}
+ADULT_SHIRT_PREMIUM_BREAKDOWN_LABEL = "Adult Shirts 5XL/6XL"
 DEFAULT_PRICING_AID_RATES = {
     "adult_shirt_standard": ADULT_SHIRT_STANDARD_PRICE,
     "adult_shirt_premium": ADULT_SHIRT_PREMIUM_PRICE,
@@ -441,6 +443,11 @@ def build_excel_breakdown(
             product_group = classify_product_group(item, item_code_groups)
             if product_group != "Other items":
                 product_counts[product_group] += 1
+                if (
+                    product_group == "Adult Shirts"
+                    and set(extract_size_tokens(item)) & ADULT_SHIRT_PREMIUM_SIZE_TOKENS
+                ):
+                    product_counts[ADULT_SHIRT_PREMIUM_BREAKDOWN_LABEL] += 1
             else:
                 other_counts[item] = other_counts.get(item, 0) + 1
 
@@ -816,6 +823,8 @@ def build_management_breakdown_sheets(
 
     pricing_rows = []
     for row in clothing_df.itertuples(index=False):
+        if row.Category == ADULT_SHIRT_PREMIUM_BREAKDOWN_LABEL:
+            continue
         pricing_rows.append(
             {
                 "Category Type": "Product group",
