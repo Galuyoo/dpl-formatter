@@ -64,6 +64,17 @@ def test_rl100_with_another_item_remains_parcel():
     assert classify_row(make_row("RL100, Mug")) == "Parcel"
 
 
+def test_rl300_is_lbt_and_tracked_rl300_is_track24():
+    assert is_lbt_product("RL300") is True
+    assert classify_row(make_row("RL300")) == "LBT"
+    assert classify_row(make_row("RL300", "Tracked 24")) == "Track24"
+
+
+def test_rl300_with_another_item_remains_parcel():
+    assert is_lbt_product("RL300, Mug") is False
+    assert classify_row(make_row("RL300, Mug")) == "Parcel"
+
+
 def test_not_tracked_text_does_not_count_as_tracked():
     assert is_tracked_value("not tracked") is False
     assert is_tracked_value("untracked") is False

@@ -72,6 +72,7 @@ def test_build_excel_breakdown_counts_delivery_and_clothing_types():
         "Kids Hoodies": 1,
         "Adult Hoodies": 0,
         "RL100": 0,
+        "RL300": 0,
     }
     assert other_df.to_dict("records") == [{"Item": "Mug", "Count": 2}]
 
@@ -291,6 +292,31 @@ def test_rl100_is_its_own_manual_priced_item_group():
     rl100_pricing_row = pricing_df[pricing_df["Product Item"] == "RL100"].iloc[0]
     assert rl100_pricing_row["Item Price"] == 2.25
     assert rl100_pricing_row["Pricing Status"] == "Priced"
+
+    summary = dict(zip(summary_df["Category"], summary_df["Amount"]))
+    assert summary["Unpriced manual items"] == 0
+
+
+def test_rl300_is_its_own_manual_priced_item_group():
+    df = base_df()
+    df.loc[0, "product"] = "RL300, Mug"
+
+    _, product_df, other_df = build_excel_breakdown(df)
+    item_detail_df = build_order_item_breakdown(df)
+    pricing_df, summary_df = build_pricing_aid_details(
+        item_detail_df,
+        other_item_prices={"RL300": 3.25, "Mug": 3.0},
+    )
+
+    assert dict(zip(product_df["Category"], product_df["Count"]))["RL300"] == 1
+    assert other_df.to_dict("records") == [{"Item": "Mug", "Count": 2}]
+
+    rl300_row = item_detail_df[item_detail_df["Product Item"] == "RL300"].iloc[0]
+    assert rl300_row["Product Group"] == "RL300"
+
+    rl300_pricing_row = pricing_df[pricing_df["Product Item"] == "RL300"].iloc[0]
+    assert rl300_pricing_row["Item Price"] == 3.25
+    assert rl300_pricing_row["Pricing Status"] == "Priced"
 
     summary = dict(zip(summary_df["Category"], summary_df["Amount"]))
     assert summary["Unpriced manual items"] == 0

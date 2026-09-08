@@ -63,6 +63,7 @@ KIDS_SIZE_PATTERN = re.compile(
     r"(?![A-Z0-9])"
 )
 RL100_PATTERN = re.compile(r"(?<![A-Z0-9])RL100(?![A-Z0-9])", re.IGNORECASE)
+RL300_PATTERN = re.compile(r"(?<![A-Z0-9])RL300(?![A-Z0-9])", re.IGNORECASE)
 
 
 def is_tracked_value(value) -> bool:
@@ -179,7 +180,7 @@ def is_lbt_product(product: str) -> bool:
     if not isinstance(product, str):
         return False
 
-    if RL100_PATTERN.search(product) and not has_multiple_items(product):
+    if (RL100_PATTERN.search(product) or RL300_PATTERN.search(product)) and not has_multiple_items(product):
         return True
 
     return (

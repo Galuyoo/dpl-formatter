@@ -13,6 +13,7 @@ PRODUCT_GROUP_OPTIONS = [
     "Kids Hoodies",
     "Adult Hoodies",
     "RL100",
+    "RL300",
     "Other items",
 ]
 

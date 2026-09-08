@@ -253,7 +253,7 @@ CLOTHING_BREAKDOWN_LABELS = [
     "Kids Hoodies",
     "Adult Hoodies",
 ]
-SPECIAL_ITEM_GROUP_LABELS = ["RL100"]
+SPECIAL_ITEM_GROUP_LABELS = ["RL100", "RL300"]
 PRODUCT_BREAKDOWN_LABELS = CLOTHING_BREAKDOWN_LABELS + SPECIAL_ITEM_GROUP_LABELS
 PRODUCT_GROUP_SHEET_NAMES = {
     "Adult Shirts": "Adult Shirts",
@@ -263,6 +263,7 @@ PRODUCT_GROUP_SHEET_NAMES = {
     "Kids Hoodies": "Kids Hoodies",
     "Adult Hoodies": "Adult Hoodies",
     "RL100": "RL100",
+    "RL300": "RL300",
     "Other items": "Other Items",
 }
 BILLING_ITEM_PRICES = {
@@ -297,6 +298,7 @@ DEFAULT_PRICING_AID_RATES = {
 }
 BACK_ADD_ON_PATTERN = re.compile(r"(?<![A-Z0-9])(?:BACK|BK)(?![A-Z0-9])", re.IGNORECASE)
 RL100_PATTERN = re.compile(r"(?<![A-Z0-9])RL100(?![A-Z0-9])", re.IGNORECASE)
+RL300_PATTERN = re.compile(r"(?<![A-Z0-9])RL300(?![A-Z0-9])", re.IGNORECASE)
 
 DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT = """TSHIRT => T
 HEATHER GREY => HG
@@ -395,6 +397,8 @@ def classify_special_item(product_item: str) -> str | None:
 
     if RL100_PATTERN.search(product_item):
         return "RL100"
+    if RL300_PATTERN.search(product_item):
+        return "RL300"
 
     return None
 
@@ -588,7 +592,7 @@ def get_pricing_aid_item_price(
     if product_group in group_rate_keys:
         return active_rates[group_rate_keys[product_group]]
 
-    if product_group in {"Other items", "RL100"}:
+    if product_group in {"Other items", "RL100", "RL300"}:
         return active_other_prices.get(product_item)
 
     return None

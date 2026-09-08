@@ -615,7 +615,7 @@ def render_excel_breakdown_tab(
         code for code in (item_code_groups or {}) if code not in (item_code_prices or {})
     ]
     manual_price_df = item_detail_df[
-        item_detail_df["Product Group"].isin(["Other items", "RL100"])
+        item_detail_df["Product Group"].isin(["Other items", "RL100", "RL300"])
         | item_detail_df["Product Item"].apply(
             lambda item: any(str(code).upper() in str(item).upper() for code in configured_unpriced_codes)
         )
