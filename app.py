@@ -14,7 +14,28 @@ from core.file_io import (
     to_excel_autofit,
     to_excel_workbook_autofit,
 )
-from core.tracking import add_tracking_column_from_labels, extract_label_pages
+from core.formatting_settings import (
+    PRODUCT_GROUP_OPTIONS,
+    load_formatting_settings,
+    load_product_name_rules,
+    load_pricing_rates,
+    save_formatting_settings,
+    settings_to_rules,
+)
+from core.storefeeder import (
+    build_storefeeder_summary,
+    is_storefeeder_export,
+    normalize_storefeeder_orders,
+    read_storefeeder_file,
+    storefeeder_excel_output,
+)
+from core.tracking import (
+    add_tracking_column_from_labels,
+    build_paired_labels_pdf,
+    extract_label_pages,
+    group_label_pages_by_tracking,
+)
+from core.white_labels import build_long_product_white_labels_pdf
 from core.transform import (
     DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT,
     DEFAULT_PRICING_AID_RATES,
@@ -34,6 +55,13 @@ st.set_page_config(page_title="Formatter", layout="centered")
 
 APP_NAME = "Formatter"
 APP_VERSION = "1.2.0"
+
+
+def reject_storefeeder_in_legacy_workflow(df: pd.DataFrame) -> None:
+    if is_storefeeder_export(df):
+        raise ValueError(
+            "This looks like a StoreFeeder export. Use the local-only StoreFeeder Test workflow for this file."
+        )
 
 
 # ---------- Local admin-only metrics ----------
@@ -193,6 +221,8 @@ def render_admin_excel_download(
     file_name: str,
     button_label: str,
     key_prefix: str,
+    item_code_groups: dict[str, str] | None = None,
+    item_code_prices: dict[str, float] | None = None,
 ) -> bool:
     password = get_admin_download_password()
     unlocked_key = f"{key_prefix}_admin_excel_unlocked"
@@ -210,7 +240,12 @@ def render_admin_excel_download(
 
     if st.session_state.get(unlocked_key):
         excel_bytes = to_excel_workbook_autofit(
-            build_management_breakdown_sheets(df_in, download_df)
+            build_management_breakdown_sheets(
+                df_in,
+                download_df,
+                item_code_groups=item_code_groups,
+                item_code_prices=item_code_prices,
+            )
         )
         download_clicked = st.download_button(
             label=button_label,
@@ -470,7 +505,7 @@ def render_product_name_safety_section(
         st.caption("One rule per line. Format: OLD => NEW")
         rules_text = st.text_area(
             "Rules",
-            value=DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT,
+            value=get_saved_product_name_rules(),
             height=180,
             key=f"{key_prefix}_product_name_rules",
         )
@@ -507,9 +542,22 @@ def render_product_name_safety_section(
     return df_out
 
 
-def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
-    shipment_df, clothing_df, other_df = build_excel_breakdown(df_in)
-    item_detail_df = build_order_item_breakdown(df_in)
+def get_saved_product_name_rules() -> str:
+    if "formatting_product_name_rules" not in st.session_state:
+        st.session_state["formatting_product_name_rules"] = load_product_name_rules(
+            DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT
+        )
+    return st.session_state["formatting_product_name_rules"]
+
+
+def render_excel_breakdown_tab(
+    df_in: pd.DataFrame,
+    *,
+    item_code_groups: dict[str, str] | None = None,
+    item_code_prices: dict[str, float] | None = None,
+) -> bool:
+    shipment_df, clothing_df, other_df = build_excel_breakdown(df_in, item_code_groups)
+    item_detail_df = build_order_item_breakdown(df_in, item_code_groups)
 
     st.subheader("Details")
 
@@ -562,114 +610,15 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
             },
         )
 
-    st.subheader("Pricing aider")
-
-    price_cols = st.columns(3)
-    with price_cols[0]:
-        adult_shirt_standard = st.number_input(
-            "Adult Shirt up to 4XL",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["adult_shirt_standard"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_adult_shirt_standard",
-        )
-        adult_shirt_premium = st.number_input(
-            "Adult Shirt 5XL/6XL",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["adult_shirt_premium"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_adult_shirt_premium",
-        )
-        kids_shirt = st.number_input(
-            "Kids Shirt",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["kids_shirt"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_kids_shirt",
-        )
-        back_add_on = st.number_input(
-            "Back add-on",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["back_add_on"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_back_add_on",
-        )
-
-    with price_cols[1]:
-        adult_jumper = st.number_input(
-            "Adult Jumper/Sweatshirt",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["adult_jumper"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_adult_jumper",
-        )
-        kids_jumper = st.number_input(
-            "Kids Jumper/Sweatshirt",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["kids_jumper"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_kids_jumper",
-        )
-        adult_hoodie = st.number_input(
-            "Adult Hoodie",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["adult_hoodie"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_adult_hoodie",
-        )
-        kids_hoodie = st.number_input(
-            "Kids Hoodie",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["kids_hoodie"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_kids_hoodie",
-        )
-
-    with price_cols[2]:
-        lbt_price = st.number_input(
-            "LBT",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["LBT"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_lbt",
-        )
-        parcel_price = st.number_input(
-            "Parcel",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["Parcel"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_parcel",
-        )
-        track24_price = st.number_input(
-            "Track24",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["Track24"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_track24",
-        )
-        parcel24_price = st.number_input(
-            "Parcel24",
-            min_value=0.0,
-            value=float(DEFAULT_PRICING_AID_RATES["Parcel24"]),
-            step=0.1,
-            format="%.2f",
-            key="pricing_aid_parcel24",
-        )
-
     other_item_prices = {}
+    configured_unpriced_codes = [
+        code for code in (item_code_groups or {}) if code not in (item_code_prices or {})
+    ]
     manual_price_df = item_detail_df[
         item_detail_df["Product Group"].isin(["Other items", "RL100"])
+        | item_detail_df["Product Item"].apply(
+            lambda item: any(str(code).upper() in str(item).upper() for code in configured_unpriced_codes)
+        )
     ].copy()
 
     if manual_price_df.empty:
@@ -701,24 +650,13 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
             if pd.notna(unit_price):
                 other_item_prices[row["Product Item"]] = float(unit_price)
 
-    pricing_rates = {
-        "adult_shirt_standard": adult_shirt_standard,
-        "adult_shirt_premium": adult_shirt_premium,
-        "kids_shirt": kids_shirt,
-        "adult_jumper": adult_jumper,
-        "kids_jumper": kids_jumper,
-        "adult_hoodie": adult_hoodie,
-        "kids_hoodie": kids_hoodie,
-        "back_add_on": back_add_on,
-        "LBT": lbt_price,
-        "Parcel": parcel_price,
-        "Track24": track24_price,
-        "Parcel24": parcel24_price,
-    }
+    pricing_rates = get_formatting_pricing_rates()
     pricing_detail_df, pricing_summary_df = build_pricing_aid_details(
         item_detail_df,
         rates=pricing_rates,
         other_item_prices=other_item_prices,
+        item_code_prices=item_code_prices,
+        item_code_groups=item_code_groups,
     )
     pricing_summary = dict(zip(pricing_summary_df["Category"], pricing_summary_df["Amount"]))
 
@@ -728,6 +666,12 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
     summary_cols[2].metric("Back add-ons", f"£{pricing_summary.get('Back add-ons', 0):,.2f}")
     summary_cols[3].metric("Delivery", f"£{pricing_summary.get('Delivery', 0):,.2f}")
     unpriced_other_items = int(pricing_summary.get("Unpriced manual items", 0))
+    missing_price_items = sorted(
+        pricing_detail_df.loc[
+            pricing_detail_df["Pricing Status"] == "Needs other item price", "Product Item"
+        ].dropna().astype(str).unique().tolist()
+    )
+    st.session_state["formatting_unpriced_items"] = missing_price_items
     if unpriced_other_items:
         st.warning(f"{unpriced_other_items} manual item(s) still need a price.")
 
@@ -771,6 +715,8 @@ def render_excel_breakdown_tab(df_in: pd.DataFrame) -> None:
             },
         )
 
+    return not missing_price_items
+
 # ---------- Streamlit pages ----------
 
 def render_full_fulfilment_workflow():
@@ -798,6 +744,10 @@ def render_full_fulfilment_workflow():
         st.session_state["fulfilment_labels_pdf_name"] = ""
     if "fulfilment_labels_pdf_bytes" not in st.session_state:
         st.session_state["fulfilment_labels_pdf_bytes"] = None
+    if "fulfilment_paired_labels_pdf_bytes" not in st.session_state:
+        st.session_state["fulfilment_paired_labels_pdf_bytes"] = None
+    if "fulfilment_paired_labels_pdf_name" not in st.session_state:
+        st.session_state["fulfilment_paired_labels_pdf_name"] = ""
 
     st.subheader("Step 1 — Upload orders and generate Click & Drop file")
 
@@ -830,6 +780,7 @@ def render_full_fulfilment_workflow():
         if should_process:
             try:
                 df_in = load_input_file(uploaded_file)
+                reject_storefeeder_in_legacy_workflow(df_in)
                 preview_df, df_out, stats = transform_orders(df_in)
 
                 st.session_state["fulfilment_input_name"] = file_name
@@ -844,6 +795,8 @@ def render_full_fulfilment_workflow():
                 st.session_state["fulfilment_audit_df"] = None
                 st.session_state["fulfilment_labels_pdf_name"] = ""
                 st.session_state["fulfilment_labels_pdf_bytes"] = None
+                st.session_state["fulfilment_paired_labels_pdf_bytes"] = None
+                st.session_state["fulfilment_paired_labels_pdf_name"] = ""
 
                 log_event(
                     "fulfilment_file_processed",
@@ -899,12 +852,17 @@ def render_full_fulfilment_workflow():
     c5.metric("TrackParcel", int(category_counts["TrackParcel"]))
 
     download_df = render_product_name_safety_section(df_out, key_prefix="fulfilment")
+    white_labels_pdf_bytes, white_label_count = build_long_product_white_labels_pdf(
+        download_df,
+        int(st.session_state.get("fulfilment_product_name_limit", PRODUCT_NAME_WARNING_LIMIT)),
+        source_df=df_in,
+    )
     csv_bytes = download_df.to_csv(index=False).encode("utf-8")
     csv_name, xlsx_name = build_output_filenames()
 
     st.markdown("### Download Click & Drop file")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.download_button(
@@ -925,6 +883,19 @@ def render_full_fulfilment_workflow():
             key_prefix="fulfilment_click_drop_xlsx",
         )
 
+    with col3:
+        if white_labels_pdf_bytes:
+            st.download_button(
+                label=f"Download White Labels ({white_label_count})",
+                data=white_labels_pdf_bytes,
+                file_name="long_product_name_white_labels.pdf",
+                mime="application/pdf",
+                key="download_fulfilment_white_labels_pdf",
+                use_container_width=True,
+            )
+        else:
+            st.caption("No orders exceed the Product Name limit.")
+
     with st.expander("Preview formatted rows", expanded=False):
         st.dataframe(preview_df.head(20), width="stretch")
 
@@ -936,11 +907,22 @@ def render_full_fulfilment_workflow():
         "The original orders file is already remembered."
     )
 
-    labels_pdf = st.file_uploader(
-        "Drop Royal Mail labels PDF here",
-        type=["pdf"],
-        key="fulfilment_labels_pdf",
-    )
+    label_col, white_label_col = st.columns(2)
+
+    with label_col:
+        labels_pdf = st.file_uploader(
+            "Drop Royal Mail labels PDF here",
+            type=["pdf"],
+            key="fulfilment_labels_pdf",
+        )
+
+    with white_label_col:
+        white_labels_pdf = st.file_uploader(
+            "Drop white labels / invoices PDF here",
+            type=["pdf"],
+            key="fulfilment_white_labels_pdf",
+            help="Optional. The app places white label/invoice pages before the Royal Mail label and skips StoreFeeder CourierError pages.",
+        )
 
     if labels_pdf is None:
         st.info("Waiting for labels PDF")
@@ -1001,6 +983,26 @@ def render_full_fulfilment_workflow():
 
             st.session_state["fulfilment_tracking_df"] = tracking_df
             st.session_state["fulfilment_audit_df"] = audit_df
+            st.session_state["fulfilment_paired_labels_pdf_bytes"] = None
+            st.session_state["fulfilment_paired_labels_pdf_name"] = ""
+
+            if white_labels_pdf is not None:
+                labels_pdf.seek(0)
+                white_labels_pdf.seek(0)
+                paired_pdf_bytes = build_paired_labels_pdf(
+                    labels_pdf,
+                    white_labels_pdf,
+                    df_in["order reference"].tolist(),
+                    order_rows=df_in,
+                    skip_pages_without_tracking=skip_pages_without_tracking,
+                    allow_missing_white_labels=True,
+                    skip_courier_error_pages=True,
+                )
+                base_name, _ = os.path.splitext(labels_pdf.name)
+                st.session_state["fulfilment_paired_labels_pdf_bytes"] = paired_pdf_bytes
+                st.session_state["fulfilment_paired_labels_pdf_name"] = (
+                    f"{base_name}_paired_with_white_labels.pdf"
+                )
 
             log_event(
                 "fulfilment_tracking_success",
@@ -1041,6 +1043,27 @@ def render_full_fulfilment_workflow():
     if tracking_df is None:
         return
 
+    if st.session_state.get("fulfilment_paired_labels_pdf_bytes") is None and white_labels_pdf is not None:
+        try:
+            labels_pdf.seek(0)
+            white_labels_pdf.seek(0)
+            paired_pdf_bytes = build_paired_labels_pdf(
+                labels_pdf,
+                white_labels_pdf,
+                df_in["order reference"].tolist(),
+                order_rows=df_in,
+                skip_pages_without_tracking=skip_pages_without_tracking,
+                allow_missing_white_labels=True,
+                skip_courier_error_pages=True,
+            )
+            base_name, _ = os.path.splitext(labels_pdf.name)
+            st.session_state["fulfilment_paired_labels_pdf_bytes"] = paired_pdf_bytes
+            st.session_state["fulfilment_paired_labels_pdf_name"] = (
+                f"{base_name}_paired_with_white_labels.pdf"
+            )
+        except Exception as e:
+            st.warning(f"Could not prepare the paired labels PDF: {e}")
+
     st.success(f"Tracking added successfully to {len(tracking_df)} rows.")
 
     base_name, _ = os.path.splitext(st.session_state["fulfilment_input_name"])
@@ -1050,10 +1073,12 @@ def render_full_fulfilment_workflow():
 
     tracking_csv_bytes = tracking_df.to_csv(index=False).encode("utf-8")
     tracking_excel_bytes = to_excel_autofit(tracking_df)
+    paired_pdf_bytes = st.session_state.get("fulfilment_paired_labels_pdf_bytes")
+    paired_pdf_name = st.session_state.get("fulfilment_paired_labels_pdf_name")
 
     st.markdown("### Download tracking result")
 
-    t1, t2 = st.columns(2)
+    t1, t2, t3 = st.columns(3)
 
     with t1:
         st.download_button(
@@ -1075,6 +1100,19 @@ def render_full_fulfilment_workflow():
             use_container_width=True,
         )
 
+    with t3:
+        if paired_pdf_bytes:
+            st.download_button(
+                label="Download Paired Labels PDF",
+                data=paired_pdf_bytes,
+                file_name=paired_pdf_name or "paired_labels.pdf",
+                mime="application/pdf",
+                key="download_fulfilment_paired_labels_pdf",
+                use_container_width=True,
+            )
+        else:
+            st.info("Upload white labels PDF before running to create paired labels.")
+
     render_email_results_section(
         tracking_csv_bytes=tracking_csv_bytes,
         tracking_csv_name=tracking_csv_name,
@@ -1087,7 +1125,154 @@ def render_full_fulfilment_workflow():
             st.dataframe(audit_df.head(20), width="stretch")
 
 
+def render_formatting_settings_tab() -> None:
+    missing_price_items = st.session_state.get("formatting_unpriced_items", [])
+    if missing_price_items:
+        st.warning(
+            "Analysis is waiting for prices for: "
+            + ", ".join(missing_price_items)
+            + ". Enter them in the Analysis tab under Pricing aider before downloading."
+        )
+
+    st.subheader("Item codes and pricing")
+    st.caption("Add a code contained in the product text, choose how it should be grouped, and optionally set its unit price.")
+
+    if "formatting_item_code_settings" not in st.session_state:
+        st.session_state["formatting_item_code_settings"] = load_formatting_settings()
+
+    current_settings = st.session_state["formatting_item_code_settings"]
+    edited_settings = st.data_editor(
+        current_settings,
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+        key="formatting_item_code_settings_editor",
+        column_config={
+            "Item Code": st.column_config.TextColumn("Item code", required=True),
+            "Product Group": st.column_config.SelectboxColumn(
+                "Product group",
+                options=PRODUCT_GROUP_OPTIONS,
+                required=True,
+            ),
+            "Unit Price": st.column_config.NumberColumn(
+                "Unit price",
+                min_value=0.0,
+                step=0.1,
+                format="£%.2f",
+            ),
+        },
+    )
+    st.session_state["formatting_item_code_settings"] = edited_settings
+
+    st.subheader("Pricing aider")
+    st.caption("Set the standard item and delivery rates used in the Analysis tab and management workbook.")
+    if "formatting_pricing_rates" not in st.session_state:
+        st.session_state["formatting_pricing_rates"] = load_pricing_rates(DEFAULT_PRICING_AID_RATES)
+    pricing_rates = st.session_state["formatting_pricing_rates"]
+    for widget_key, rate_key in {
+        "pricing_aid_adult_shirt_standard": "adult_shirt_standard",
+        "pricing_aid_adult_shirt_premium": "adult_shirt_premium",
+        "pricing_aid_kids_shirt": "kids_shirt",
+        "pricing_aid_back_add_on": "back_add_on",
+        "pricing_aid_adult_jumper": "adult_jumper",
+        "pricing_aid_kids_jumper": "kids_jumper",
+        "pricing_aid_adult_hoodie": "adult_hoodie",
+        "pricing_aid_kids_hoodie": "kids_hoodie",
+        "pricing_aid_lbt": "LBT",
+        "pricing_aid_parcel": "Parcel",
+        "pricing_aid_track24": "Track24",
+        "pricing_aid_parcel24": "Parcel24",
+    }.items():
+        st.session_state.setdefault(widget_key, float(pricing_rates[rate_key]))
+
+    price_cols = st.columns(3)
+    with price_cols[0]:
+        st.number_input("Adult Shirt up to 4XL", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_adult_shirt_standard")
+        st.number_input("Adult Shirt 5XL/6XL", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_adult_shirt_premium")
+        st.number_input("Kids Shirt", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_kids_shirt")
+        st.number_input("Back add-on", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_back_add_on")
+
+    with price_cols[1]:
+        st.number_input("Adult Jumper/Sweatshirt", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_adult_jumper")
+        st.number_input("Kids Jumper/Sweatshirt", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_kids_jumper")
+        st.number_input("Adult Hoodie", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_adult_hoodie")
+        st.number_input("Kids Hoodie", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_kids_hoodie")
+
+    with price_cols[2]:
+        st.number_input("LBT", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_lbt")
+        st.number_input("Parcel", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_parcel")
+        st.number_input("Track24", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_track24")
+        st.number_input("Parcel24", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_parcel24")
+
+    st.subheader("Product Name shortening rules")
+    st.caption("One rule per line in the format: OLD => NEW. These rules are optional and can be applied before downloading.")
+    if "formatting_product_name_rules" not in st.session_state:
+        st.session_state["formatting_product_name_rules"] = load_product_name_rules(
+            DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT
+        )
+    st.text_area(
+        "Rules",
+        key="formatting_product_name_rules",
+        height=180,
+        label_visibility="collapsed",
+    )
+
+    if st.button("Save settings", type="primary", icon=":material/save:", key="save_formatting_item_settings"):
+        pricing_rates = get_formatting_pricing_rates()
+        save_formatting_settings(
+            edited_settings,
+            pricing_rates=pricing_rates,
+            product_name_rules=st.session_state["formatting_product_name_rules"],
+        )
+        st.session_state["formatting_item_code_settings"] = load_formatting_settings()
+        st.session_state["formatting_pricing_rates"] = pricing_rates
+        st.success("Item code settings saved for future uploads.")
+        st.rerun()
+
+
+def get_formatting_item_code_rules() -> tuple[dict[str, str], dict[str, float]]:
+    settings_df = st.session_state.get("formatting_item_code_settings")
+    if settings_df is None:
+        settings_df = load_formatting_settings()
+        st.session_state["formatting_item_code_settings"] = settings_df
+    return settings_to_rules(settings_df)
+
+
+def get_formatting_pricing_rates() -> dict[str, float]:
+    if "formatting_pricing_rates" not in st.session_state:
+        st.session_state["formatting_pricing_rates"] = load_pricing_rates(DEFAULT_PRICING_AID_RATES)
+
+    widget_to_rate = {
+        "pricing_aid_adult_shirt_standard": "adult_shirt_standard",
+        "pricing_aid_adult_shirt_premium": "adult_shirt_premium",
+        "pricing_aid_kids_shirt": "kids_shirt",
+        "pricing_aid_back_add_on": "back_add_on",
+        "pricing_aid_adult_jumper": "adult_jumper",
+        "pricing_aid_kids_jumper": "kids_jumper",
+        "pricing_aid_adult_hoodie": "adult_hoodie",
+        "pricing_aid_kids_hoodie": "kids_hoodie",
+        "pricing_aid_lbt": "LBT",
+        "pricing_aid_parcel": "Parcel",
+        "pricing_aid_track24": "Track24",
+        "pricing_aid_parcel24": "Parcel24",
+    }
+    rates = dict(st.session_state["formatting_pricing_rates"])
+    for widget_key, rate_key in widget_to_rate.items():
+        if widget_key in st.session_state:
+            rates[rate_key] = float(st.session_state[widget_key])
+    st.session_state["formatting_pricing_rates"] = rates
+    return rates
+
+
 def render_formatting_page():
+    analysis_tab, settings_tab = st.tabs(["Analysis", "Settings"])
+    with analysis_tab:
+        render_formatting_analysis()
+    with settings_tab:
+        render_formatting_settings_tab()
+
+
+def render_formatting_analysis():
     st.caption("Upload your orders export and generate a Click & Drop ready file.")
 
     st.subheader("Upload File")
@@ -1131,6 +1316,8 @@ def render_formatting_page():
 
     try:
         df_in = load_input_file(uploaded_file)
+        reject_storefeeder_in_legacy_workflow(df_in)
+        item_code_groups, item_code_prices = get_formatting_item_code_rules()
         preview_df, df_out, stats = transform_orders(df_in)
     except Exception as e:
         log_event(
@@ -1190,17 +1377,30 @@ def render_formatting_page():
         st.success("File processed successfully.")
 
     with breakdown_tab:
-        render_excel_breakdown_tab(df_in)
+        pricing_complete = render_excel_breakdown_tab(
+            df_in,
+            item_code_groups=item_code_groups,
+            item_code_prices=item_code_prices,
+        )
 
     with preview_tab:
         st.dataframe(preview_df.head(20), width="stretch")
 
     download_df = render_product_name_safety_section(df_out, key_prefix="formatting")
+    white_labels_pdf_bytes, white_label_count = build_long_product_white_labels_pdf(
+        download_df,
+        int(st.session_state.get("formatting_product_name_limit", PRODUCT_NAME_WARNING_LIMIT)),
+        source_df=df_in,
+    )
     csv_bytes = download_df.to_csv(index=False).encode("utf-8")
     csv_name, xlsx_name = build_output_filenames()
 
     st.subheader("Download Result")
-    col1, col2 = st.columns(2)
+    if not pricing_complete:
+        st.error("Add a price for every item in the Pricing aider before downloading the analysis outputs.")
+        return
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         csv_clicked = st.download_button(
@@ -1229,6 +1429,19 @@ def render_formatting_page():
                 app_version=APP_VERSION,
             )
 
+    with col3:
+        if white_labels_pdf_bytes:
+            st.download_button(
+                label=f"Download White Labels ({white_label_count})",
+                data=white_labels_pdf_bytes,
+                file_name="long_product_name_white_labels.pdf",
+                mime="application/pdf",
+                key="download_formatting_white_labels_pdf",
+                use_container_width=True,
+            )
+        else:
+            st.caption("No orders exceed the Product Name limit.")
+
     with col2:
         xlsx_clicked = render_admin_excel_download(
             df_in=df_in,
@@ -1236,6 +1449,8 @@ def render_formatting_page():
             file_name=xlsx_name,
             button_label="⬇️ Download Excel (for checking)",
             key_prefix="formatting_xlsx",
+            item_code_groups=item_code_groups,
+            item_code_prices=item_code_prices,
         )
         if xlsx_clicked:
             log_event(
@@ -1261,9 +1476,9 @@ def render_add_tracking_page():
     st.caption("Verification checks that each row's Name and Postcode are found on the corresponding label page before adding Tracking.")
 
     st.subheader("Upload Files")
-    st.caption("Upload both files below to match each order row with its label page.")
+    st.caption("Upload the order CSV, Royal Mail labels, and optionally white labels / invoices to create a paired PDF.")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         with st.container(border=True):
@@ -1296,6 +1511,22 @@ def render_add_tracking_page():
                 st.success(f"Loaded: {labels_pdf.name}")
             else:
                 st.info("Waiting for labels PDF")
+
+    with col3:
+        with st.container(border=True):
+            st.markdown("### White Labels")
+            st.caption("Optional invoice / white-label PDF. StoreFeeder CourierError pages are skipped automatically.")
+            white_labels_pdf = st.file_uploader(
+                "Upload white labels PDF",
+                type=["pdf"],
+                key="tracking_white_labels_pdf",
+                label_visibility="collapsed",
+            )
+
+            if white_labels_pdf is not None:
+                st.success(f"Loaded: {white_labels_pdf.name}")
+            else:
+                st.info("Optional")
 
     if input_file is None or labels_pdf is None:
         return
@@ -1373,6 +1604,23 @@ def render_add_tracking_page():
             status_placeholder.empty()
 
             data_bytes, out_name, mime = dataframe_to_download_bytes(df_out, input_file.name)
+            paired_pdf_bytes = None
+            paired_pdf_name = ""
+
+            if white_labels_pdf is not None:
+                labels_pdf.seek(0)
+                white_labels_pdf.seek(0)
+                paired_pdf_bytes = build_paired_labels_pdf(
+                    labels_pdf,
+                    white_labels_pdf,
+                    df_in["order reference"].tolist(),
+                    order_rows=df_in,
+                    skip_pages_without_tracking=skip_pages_without_tracking,
+                    allow_missing_white_labels=True,
+                    skip_courier_error_pages=True,
+                )
+                base_name, _ = os.path.splitext(labels_pdf.name)
+                paired_pdf_name = f"{base_name}_paired_with_white_labels.pdf"
 
             success_key = f"tracking_success::{input_name}::{labels_pdf.name}"
             if st.session_state.get("last_success_logged_for_tracking") != success_key:
@@ -1400,6 +1648,16 @@ def render_add_tracking_page():
                 key="download_tracking_output",
                 use_container_width=True,
             )
+
+            if paired_pdf_bytes:
+                st.download_button(
+                    label="Download Paired Labels PDF",
+                    data=paired_pdf_bytes,
+                    file_name=paired_pdf_name or "paired_labels.pdf",
+                    mime="application/pdf",
+                    key="download_tracking_paired_labels_pdf",
+                    use_container_width=True,
+                )
 
             if download_clicked:
                 log_event(
@@ -1429,6 +1687,148 @@ def render_add_tracking_page():
         )
         st.error(str(e))
         return
+
+
+def render_storefeeder_test_page():
+    st.caption("Local-only test path for raw StoreFeeder exports.")
+
+    st.subheader("Upload StoreFeeder File")
+    with st.container(border=True):
+        st.markdown("### StoreFeeder Export")
+        uploaded_file = st.file_uploader(
+            "Drop the raw StoreFeeder Excel or CSV export here",
+            type=["csv", "xlsx", "xls"],
+            key="storefeeder_test_uploader",
+            label_visibility="collapsed",
+        )
+
+        if uploaded_file is not None:
+            st.success(f"Loaded: {uploaded_file.name}")
+        else:
+            st.info("Waiting for StoreFeeder export")
+
+    if uploaded_file is None:
+        return
+
+    try:
+        raw_df = read_storefeeder_file(uploaded_file)
+        summary = build_storefeeder_summary(raw_df)
+        normalized_df = normalize_storefeeder_orders(raw_df)
+        preview_df, df_out, stats = transform_orders(normalized_df)
+    except Exception as e:
+        st.error(str(e))
+        return
+
+    st.subheader("Source Summary")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Source rows", summary["source_row_count"])
+    c2.metric("Unique shipments / orders", summary["unique_order_count"])
+    c3.metric("Physical product quantity", summary["physical_product_quantity_count"])
+
+    st.markdown("**Shipping category breakdown**")
+    st.dataframe(summary["shipping_breakdown"], width="stretch", hide_index=True)
+
+    normalized_tab, preview_tab = st.tabs(["Normalized Data", "Click & Drop Preview"])
+
+    with normalized_tab:
+        st.dataframe(normalized_df, width="stretch", hide_index=True)
+
+    with preview_tab:
+        st.caption(
+            f"{stats['total_orders']} Click & Drop row(s), {stats['total_products']} product item(s)"
+        )
+        st.dataframe(df_out, width="stretch", hide_index=True)
+
+    st.subheader("Pair Royal Mail labels with StoreFeeder invoices")
+    st.caption(
+        "Upload the Royal Mail labels and the StoreFeeder invoice PDF. Only the first StoreFeeder white-label page is used; CourierError and customs pages are skipped."
+    )
+    label_col, invoice_col = st.columns(2)
+
+    with label_col:
+        storefeeder_labels_pdf = st.file_uploader(
+            "Royal Mail labels PDF",
+            type=["pdf"],
+            key="storefeeder_test_labels_pdf",
+        )
+        if storefeeder_labels_pdf is not None:
+            st.success(f"Loaded: {storefeeder_labels_pdf.name}")
+
+    with invoice_col:
+        storefeeder_invoice_pdf = st.file_uploader(
+            "StoreFeeder invoices PDF",
+            type=["pdf"],
+            key="storefeeder_test_invoice_pdf",
+        )
+        if storefeeder_invoice_pdf is not None:
+            st.success(f"Loaded: {storefeeder_invoice_pdf.name}")
+
+    paired_storefeeder_pdf = None
+    if storefeeder_labels_pdf is not None and storefeeder_invoice_pdf is not None:
+        try:
+            storefeeder_labels_pdf.seek(0)
+            labels = extract_label_pages(storefeeder_labels_pdf)
+            label_groups = group_label_pages_by_tracking(labels)
+            if len(label_groups) != len(df_out):
+                st.error(
+                    f"The labels PDF has {len(labels)} pages in {len(label_groups)} shipments, but the normalized StoreFeeder file has {len(df_out)} orders."
+                )
+            else:
+                storefeeder_labels_pdf.seek(0)
+                storefeeder_invoice_pdf.seek(0)
+                paired_storefeeder_pdf = build_paired_labels_pdf(
+                    storefeeder_labels_pdf,
+                    storefeeder_invoice_pdf,
+                    df_out["order reference"].tolist(),
+                    order_rows=df_out,
+                    allow_missing_white_labels=True,
+                    skip_courier_error_pages=True,
+                    group_duplicate_label_pages=True,
+                    only_storefeeder_invoice_pages=True,
+                )
+        except Exception as e:
+            st.error(f"Could not create the paired StoreFeeder PDF: {e}")
+
+    if paired_storefeeder_pdf:
+        st.download_button(
+            label="Download StoreFeeder Paired Labels PDF",
+            data=paired_storefeeder_pdf,
+            file_name="storefeeder_labels_paired_with_invoices.pdf",
+            mime="application/pdf",
+            key="download_storefeeder_test_paired_pdf",
+            use_container_width=True,
+        )
+
+    csv_name, xlsx_name = build_output_filenames()
+    excel_bytes = storefeeder_excel_output(
+        normalized_df=normalized_df,
+        preview_df=preview_df,
+        output_df=df_out,
+        shipping_breakdown=summary["shipping_breakdown"],
+    )
+
+    st.subheader("Download Result")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.download_button(
+            label="Download CSV (Click & Drop)",
+            data=df_out.to_csv(index=False).encode("utf-8"),
+            file_name=csv_name,
+            mime="text/csv",
+            key="download_storefeeder_test_csv",
+            use_container_width=True,
+        )
+
+    with col2:
+        st.download_button(
+            label="Download Excel (for checking)",
+            data=excel_bytes,
+            file_name=xlsx_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_storefeeder_test_xlsx",
+            use_container_width=True,
+        )
     
 # ---------- Streamlit UI ----------
 def main():
@@ -1442,9 +1842,13 @@ def main():
         log_event("app_open", success=True, app_name=APP_NAME, app_version=APP_VERSION)
         st.session_state["app_open_logged"] = True
 
+    workflow_options = ["Full Fulfilment Workflow", "Formatting", "Add Tracking"]
+    if is_local_environment():
+        workflow_options.append("StoreFeeder Test")
+
     mode = st.radio(
         "Workflow",
-        ["Full Fulfilment Workflow", "Formatting", "Add Tracking"],
+        workflow_options,
         horizontal=True,
     )
 
@@ -1452,8 +1856,10 @@ def main():
         render_full_fulfilment_workflow()
     elif mode == "Formatting":
         render_formatting_page()
-    else:
+    elif mode == "Add Tracking":
         render_add_tracking_page()
+    else:
+        render_storefeeder_test_page()
 
 
 if __name__ == "__main__":

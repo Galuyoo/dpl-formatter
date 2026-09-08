@@ -10,6 +10,7 @@ from core.classification import (
     get_row_tracked_flag,
 )
 from core.config import REQUIRED_INPUT_COLUMNS
+from core.normalization import normalize_text
 
 
 PRODUCT_NAME_LINE_LIMITS = [56, 60, 60, 60]
@@ -398,11 +399,21 @@ def classify_special_item(product_item: str) -> str | None:
     return None
 
 
-def classify_product_group(product_item: str) -> str:
+def classify_product_group(
+    product_item: str,
+    item_code_groups: dict[str, str] | None = None,
+) -> str:
+    normalized_item = normalize_text(product_item)
+    for item_code, group in (item_code_groups or {}).items():
+        if normalize_text(item_code) and normalize_text(item_code) in normalized_item:
+            return group
     return classify_clothing_item(product_item) or classify_special_item(product_item) or "Other items"
 
 
-def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_excel_breakdown(
+    df: pd.DataFrame,
+    item_code_groups: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     working_df = df.copy()
     working_df["__Tracked"] = working_df.apply(get_row_tracked_flag, axis=1)
     working_df["__Category"] = working_df.apply(classify_row, axis=1)
@@ -423,7 +434,7 @@ def build_excel_breakdown(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame,
             if has_back_add_on(item):
                 back_add_on_count += 1
 
-            product_group = classify_product_group(item)
+            product_group = classify_product_group(item, item_code_groups)
             if product_group != "Other items":
                 product_counts[product_group] += 1
             else:
@@ -472,7 +483,10 @@ def get_item_delivery_type(row: pd.Series, item: str) -> str:
     return get_delivery_breakdown_label(classify_row(item_row))
 
 
-def build_order_item_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+def build_order_item_breakdown(
+    df: pd.DataFrame,
+    item_code_groups: dict[str, str] | None = None,
+) -> pd.DataFrame:
     rows = []
 
     for row_number, (_, row) in enumerate(df.iterrows(), start=1):
@@ -480,7 +494,7 @@ def build_order_item_breakdown(df: pd.DataFrame) -> pd.DataFrame:
         order_delivery_type = get_delivery_breakdown_label(classify_row(row))
 
         for item in split_product_items(product):
-            product_group = classify_product_group(item)
+            product_group = classify_product_group(item, item_code_groups)
             item_delivery_type = get_item_delivery_type(row, item)
             rows.append(
                 {
@@ -529,14 +543,33 @@ def get_billing_item_price(product_group: str, product_item: str) -> float | Non
     return None
 
 
+def get_custom_item_code_price(product_item: str, item_code_prices: dict[str, float] | None = None) -> float | None:
+    normalized_item = str(product_item).upper()
+    for item_code, price in (item_code_prices or {}).items():
+        if str(item_code).upper() in normalized_item:
+            return price
+    return None
+
+
 def get_pricing_aid_item_price(
     product_group: str,
     product_item: str,
     rates: dict[str, float] | None = None,
     other_item_prices: dict[str, float] | None = None,
+    item_code_prices: dict[str, float] | None = None,
+    item_code_groups: dict[str, str] | None = None,
 ) -> float | None:
     active_rates = {**DEFAULT_PRICING_AID_RATES, **(rates or {})}
     active_other_prices = other_item_prices or {}
+    normalized_item = str(product_item).upper()
+    for item_code, price in (item_code_prices or {}).items():
+        if str(item_code).upper() in normalized_item:
+            return price
+    for item_code in (item_code_groups or {}):
+        if str(item_code).upper() in normalized_item:
+            if product_item in active_other_prices:
+                return active_other_prices[product_item]
+            return None
 
     if product_group == "Adult Shirts":
         item_size_tokens = set(extract_size_tokens(product_item))
@@ -565,6 +598,8 @@ def build_pricing_aid_details(
     item_detail_df: pd.DataFrame,
     rates: dict[str, float] | None = None,
     other_item_prices: dict[str, float] | None = None,
+    item_code_prices: dict[str, float] | None = None,
+    item_code_groups: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     active_rates = {**DEFAULT_PRICING_AID_RATES, **(rates or {})}
     active_other_prices = other_item_prices or {}
@@ -577,6 +612,8 @@ def build_pricing_aid_details(
             row["Product Item"],
             active_rates,
             active_other_prices,
+            item_code_prices,
+            item_code_groups,
         )
         back_add_on_price = active_rates["back_add_on"] if row["Back Add-on"] else 0.0
         order_row = row["Order Row"]
@@ -650,12 +687,17 @@ def build_pricing_aid_details(
     return details_df, pd.DataFrame(summary_rows, columns=["Category", "Amount"])
 
 
-def build_billing_details(item_detail_df: pd.DataFrame) -> pd.DataFrame:
+def build_billing_details(
+    item_detail_df: pd.DataFrame,
+    item_code_prices: dict[str, float] | None = None,
+) -> pd.DataFrame:
     rows = []
     charged_order_rows = set()
 
     for line_number, row in enumerate(item_detail_df.to_dict("records"), start=1):
-        item_price = get_billing_item_price(row["Product Group"], row["Product Item"])
+        item_price = get_custom_item_code_price(row["Product Item"], item_code_prices)
+        if item_price is None:
+            item_price = get_billing_item_price(row["Product Group"], row["Product Item"])
         order_row = row["Order Row"]
         is_first_item_for_order = order_row not in charged_order_rows
         shipping_price = BILLING_DELIVERY_PRICES.get(row["Order Delivery Type"], 0) if is_first_item_for_order else 0
@@ -735,10 +777,12 @@ def build_billing_rates() -> pd.DataFrame:
 def build_management_breakdown_sheets(
     df_in: pd.DataFrame,
     click_drop_df: pd.DataFrame,
+    item_code_groups: dict[str, str] | None = None,
+    item_code_prices: dict[str, float] | None = None,
 ) -> dict[str, pd.DataFrame]:
-    shipment_df, clothing_df, other_df = build_excel_breakdown(df_in)
-    item_detail_df = build_order_item_breakdown(df_in)
-    billing_details_df = build_billing_details(item_detail_df)
+    shipment_df, clothing_df, other_df = build_excel_breakdown(df_in, item_code_groups)
+    item_detail_df = build_order_item_breakdown(df_in, item_code_groups)
+    billing_details_df = build_billing_details(item_detail_df, item_code_prices)
     billing_rates_df = build_billing_rates()
 
     total_orders = len(df_in)

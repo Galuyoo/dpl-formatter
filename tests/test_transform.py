@@ -206,6 +206,71 @@ def test_pricing_aid_uses_custom_prices_back_addons_others_and_one_delivery_per_
     assert summary["Unpriced manual items"] == 0
 
 
+def test_manager_item_code_rules_override_group_and_price():
+    df = base_df().iloc[[0]].copy()
+    df.loc[0, "product"] = "NEW-CODE-01"
+
+    item_detail_df = build_order_item_breakdown(
+        df,
+        item_code_groups={"NEW-CODE-01": "Kids Hoodies"},
+    )
+    pricing_df, summary_df = build_pricing_aid_details(
+        item_detail_df,
+        item_code_prices={"NEW-CODE-01": 8.75},
+    )
+
+    matched = pricing_df[pricing_df["Product Item"] == "NEW-CODE-01"].iloc[0]
+    assert matched["Product Group"] == "Kids Hoodies"
+    assert matched["Item Price"] == 8.75
+    assert dict(zip(summary_df["Category"], summary_df["Amount"]))["Unpriced manual items"] == 0
+
+
+def test_manager_item_code_without_price_requires_analysis_price():
+    df = base_df().iloc[[0]].copy()
+    df.loc[0, "product"] = "NEW-CODE-01"
+
+    item_detail_df = build_order_item_breakdown(
+        df,
+        item_code_groups={"NEW-CODE-01": "Adult Shirts"},
+    )
+    pricing_df, summary_df = build_pricing_aid_details(
+        item_detail_df,
+        item_code_groups={"NEW-CODE-01": "Adult Shirts"},
+    )
+
+    matched = pricing_df.iloc[0]
+    assert matched["Product Group"] == "Adult Shirts"
+    assert pd.isna(matched["Item Price"])
+    assert matched["Pricing Status"] == "Needs other item price"
+    assert dict(zip(summary_df["Category"], summary_df["Amount"]))["Unpriced manual items"] == 1
+
+    priced_df, priced_summary_df = build_pricing_aid_details(
+        item_detail_df,
+        item_code_groups={"NEW-CODE-01": "Adult Shirts"},
+        other_item_prices={"NEW-CODE-01": 6.25},
+    )
+    assert priced_df.iloc[0]["Item Price"] == 6.25
+    assert dict(zip(priced_summary_df["Category"], priced_summary_df["Amount"]))["Unpriced manual items"] == 0
+
+
+def test_adult_shirt_pricing_distinguishes_5xl_and_6xl_from_4xl():
+    df = pd.concat(
+        [
+            base_df().iloc[[0]].assign(product="Adult T-Shirt 4XL"),
+            base_df().iloc[[0]].assign(product="Adult T-Shirt 5XL"),
+            base_df().iloc[[0]].assign(product="Adult T-Shirt 6XL"),
+        ],
+        ignore_index=True,
+    )
+    item_detail_df = build_order_item_breakdown(df)
+    pricing_df, _ = build_pricing_aid_details(
+        item_detail_df,
+        rates={"adult_shirt_standard": 5.5, "adult_shirt_premium": 7.5},
+    )
+
+    assert pricing_df["Item Price"].tolist() == [5.5, 7.5, 7.5]
+
+
 def test_rl100_is_its_own_manual_priced_item_group():
     df = base_df()
     df.loc[0, "product"] = "RL100, Mug"
