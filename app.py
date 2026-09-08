@@ -543,11 +543,11 @@ def render_product_name_safety_section(
 
 
 def get_saved_product_name_rules() -> str:
-    if "formatting_product_name_rules" not in st.session_state:
-        st.session_state["formatting_product_name_rules"] = load_product_name_rules(
+    if "formatting_saved_product_name_rules" not in st.session_state:
+        st.session_state["formatting_saved_product_name_rules"] = load_product_name_rules(
             DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT
         )
-    return st.session_state["formatting_product_name_rules"]
+    return st.session_state["formatting_saved_product_name_rules"]
 
 
 def render_excel_breakdown_tab(
@@ -1206,26 +1206,27 @@ def render_formatting_settings_tab() -> None:
 
     st.subheader("Product Name shortening rules")
     st.caption("One rule per line in the format: OLD => NEW. These rules are optional and can be applied before downloading.")
-    if "formatting_product_name_rules" not in st.session_state:
-        st.session_state["formatting_product_name_rules"] = load_product_name_rules(
-            DEFAULT_PRODUCT_NAME_SHORTENING_RULES_TEXT
-        )
+    settings_rules_key = "formatting_settings_product_name_rules"
+    st.session_state.setdefault(settings_rules_key, get_saved_product_name_rules())
     st.text_area(
         "Rules",
-        key="formatting_product_name_rules",
+        key=settings_rules_key,
         height=180,
         label_visibility="collapsed",
     )
 
     if st.button("Save settings", type="primary", icon=":material/save:", key="save_formatting_item_settings"):
         pricing_rates = get_formatting_pricing_rates()
+        saved_rules = st.session_state[settings_rules_key]
         save_formatting_settings(
             edited_settings,
             pricing_rates=pricing_rates,
-            product_name_rules=st.session_state["formatting_product_name_rules"],
+            product_name_rules=saved_rules,
         )
         st.session_state["formatting_item_code_settings"] = load_formatting_settings()
         st.session_state["formatting_pricing_rates"] = pricing_rates
+        st.session_state["formatting_saved_product_name_rules"] = saved_rules
+        st.session_state["reset_formatting_product_name_rules_widgets"] = True
         st.success("Item code settings saved for future uploads.")
         st.rerun()
 
@@ -1265,6 +1266,10 @@ def get_formatting_pricing_rates() -> dict[str, float]:
 
 
 def render_formatting_page():
+    if st.session_state.pop("reset_formatting_product_name_rules_widgets", False):
+        st.session_state.pop("formatting_product_name_rules", None)
+        st.session_state.pop("formatting_xlsx_product_name_rules", None)
+
     analysis_tab, settings_tab = st.tabs(["Analysis", "Settings"])
     with analysis_tab:
         render_formatting_analysis()
