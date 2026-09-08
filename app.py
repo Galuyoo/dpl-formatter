@@ -16,9 +16,11 @@ from core.file_io import (
 )
 from core.formatting_settings import (
     PRODUCT_GROUP_OPTIONS,
+    add_item_code_setting,
     load_formatting_settings,
     load_product_name_rules,
     load_pricing_rates,
+    remove_item_code_settings,
     save_formatting_settings,
     settings_to_rules,
 )
@@ -612,6 +614,44 @@ def render_excel_breakdown_tab(
             },
         )
 
+    if other_df.empty:
+        st.success("No unrecognized items detected.", icon=":material/check_circle:")
+    else:
+        unknown_item_count = int(other_df["Count"].sum())
+        st.error(
+            f"STOP: {unknown_item_count} unrecognized item(s) detected. "
+            "Review every affected order before fulfilment.",
+            icon=":material/report:",
+        )
+        with st.container(border=True):
+            st.subheader("Other items")
+            st.caption("These products do not match any known garment or saved item code.")
+            st.dataframe(
+                other_df,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Item": st.column_config.TextColumn("Unknown item", pinned=True),
+                    "Count": st.column_config.NumberColumn("Items", format="%d"),
+                },
+            )
+            unknown_orders_df = item_detail_df.loc[
+                item_detail_df["Product Group"] == "Other items",
+                ["Order Reference", "Customer Name", "Postcode", "Product Item", "Full Product"],
+            ].copy()
+            st.dataframe(
+                unknown_orders_df,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Order Reference": st.column_config.TextColumn("Order", pinned=True),
+                    "Customer Name": st.column_config.TextColumn("Customer"),
+                    "Postcode": st.column_config.TextColumn("Postcode"),
+                    "Product Item": st.column_config.TextColumn("Unknown item"),
+                    "Full Product": st.column_config.TextColumn("Full order contents"),
+                },
+            )
+
     other_item_prices = {}
     pricing_rates = get_formatting_pricing_rates()
     configured_unpriced_codes = [
@@ -624,6 +664,7 @@ def render_excel_breakdown_tab(
         )
     ].copy()
 
+    st.subheader("Pricing aider")
     if manual_price_df.empty:
         st.success("No manual item prices needed.")
     else:
@@ -707,21 +748,6 @@ def render_excel_breakdown_tab(
             "Line Total": st.column_config.NumberColumn("Line Total", format="£%.2f"),
         },
     )
-
-    st.subheader("Other items")
-
-    if other_df.empty:
-        st.success("No other items found.")
-    else:
-        st.dataframe(
-            other_df,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Item": st.column_config.TextColumn("Item"),
-                "Count": st.column_config.NumberColumn("Items", format="%d"),
-            },
-        )
 
     return not missing_price_items
 
@@ -1134,46 +1160,72 @@ def render_full_fulfilment_workflow():
 
 
 def render_formatting_settings_tab() -> None:
+    if st.session_state.pop("reset_formatting_item_pricing_editor", False):
+        st.session_state.pop("formatting_item_code_pricing_editor", None)
+        st.session_state.pop("formatting_remove_item_codes", None)
+
+    settings_flash = st.session_state.pop("formatting_settings_flash", "")
+    if settings_flash:
+        st.success(settings_flash, icon=":material/check_circle:")
+
     missing_price_items = st.session_state.get("formatting_unpriced_items", [])
     if missing_price_items:
         st.warning(
             "Analysis is waiting for prices for: "
             + ", ".join(missing_price_items)
-            + ". Enter them in the Analysis tab under Pricing aider before downloading."
+            + ". Add permanent prices below, or enter temporary prices in the Analysis tab."
         )
 
-    st.subheader("Item codes and pricing")
-    st.caption("Add a code contained in the product text, choose how it should be grouped, and optionally set its unit price.")
+    st.subheader("Item codes")
+    st.caption(
+        "Add a code contained in the product text. It is saved immediately and added to the Pricing aider below."
+    )
 
     if "formatting_item_code_settings" not in st.session_state:
         st.session_state["formatting_item_code_settings"] = load_formatting_settings()
 
     current_settings = st.session_state["formatting_item_code_settings"]
-    edited_settings = st.data_editor(
-        current_settings,
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        key="formatting_item_code_settings_editor",
-        column_config={
-            "Item Code": st.column_config.TextColumn("Item code", required=True),
-            "Product Group": st.column_config.SelectboxColumn(
-                "Product group",
-                options=PRODUCT_GROUP_OPTIONS,
-                required=True,
-            ),
-            "Unit Price": st.column_config.NumberColumn(
-                "Unit price",
-                min_value=0.0,
-                step=0.1,
-                format="£%.2f",
-            ),
-        },
-    )
-    st.session_state["formatting_item_code_settings"] = edited_settings
+    with st.form("add_formatting_item_code_form", clear_on_submit=True):
+        add_code_col, add_group_col, add_button_col = st.columns([1.2, 1.4, 0.7], vertical_alignment="bottom")
+        with add_code_col:
+            new_item_code = st.text_input("Item code", placeholder="e.g. RL400")
+        with add_group_col:
+            new_product_group = st.selectbox("Product group", PRODUCT_GROUP_OPTIONS)
+        with add_button_col:
+            add_item_clicked = st.form_submit_button(
+                "Add code",
+                type="primary",
+                icon=":material/add:",
+                use_container_width=True,
+            )
+
+    if add_item_clicked:
+        try:
+            updated_settings = add_item_code_setting(
+                current_settings,
+                new_item_code,
+                new_product_group,
+            )
+        except ValueError as exc:
+            st.error(str(exc), icon=":material/error:")
+        else:
+            save_formatting_settings(
+                updated_settings,
+                pricing_rates=get_formatting_pricing_rates(),
+                product_name_rules=st.session_state.get(
+                    "formatting_settings_product_name_rules",
+                    get_saved_product_name_rules(),
+                ),
+            )
+            st.session_state["formatting_item_code_settings"] = load_formatting_settings()
+            st.session_state["reset_formatting_item_pricing_editor"] = True
+            st.session_state["formatting_settings_flash"] = (
+                f"{new_item_code.strip()} was added. Set its price before downloading analysis outputs."
+            )
+            st.rerun()
 
     st.subheader("Pricing aider")
-    st.caption("Set the standard item and delivery rates used in the Analysis tab and management workbook.")
+    st.caption("Set every item and delivery rate used in the Analysis tab and management workbook.")
     if "formatting_pricing_rates" not in st.session_state:
         st.session_state["formatting_pricing_rates"] = load_pricing_rates(DEFAULT_PRICING_AID_RATES)
     pricing_rates = st.session_state["formatting_pricing_rates"]
@@ -1218,6 +1270,88 @@ def render_formatting_settings_tab() -> None:
         st.number_input("Track24", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_track24")
         st.number_input("Parcel24", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_parcel24")
 
+    st.markdown("#### Added item prices")
+    if current_settings.empty:
+        st.info("No additional item codes have been added yet.")
+        edited_settings = current_settings
+    else:
+        edited_settings = st.data_editor(
+            current_settings,
+            num_rows="fixed",
+            width="stretch",
+            hide_index=True,
+            key="formatting_item_code_pricing_editor",
+            disabled=["Item Code"],
+            column_config={
+                "Item Code": st.column_config.TextColumn("Item code"),
+                "Product Group": st.column_config.SelectboxColumn(
+                    "Product group",
+                    options=PRODUCT_GROUP_OPTIONS,
+                    required=True,
+                ),
+                "Unit Price": st.column_config.NumberColumn(
+                    "Unit price",
+                    min_value=0.0,
+                    step=0.1,
+                    format="£%.2f",
+                ),
+            },
+        )
+    st.session_state["formatting_item_code_settings"] = edited_settings
+
+    unpriced_codes = edited_settings.loc[
+        edited_settings["Unit Price"].isna() | (edited_settings["Unit Price"] <= 0),
+        "Item Code",
+    ].tolist()
+    if unpriced_codes:
+        st.warning(
+            "Price required before analysis downloads: " + ", ".join(unpriced_codes),
+            icon=":material/notification_important:",
+        )
+
+    with st.expander("Remove item codes", icon=":material/delete:"):
+        admin_password = get_admin_download_password()
+        if current_settings.empty:
+            st.caption("There are no added item codes to remove.")
+        elif not admin_password:
+            st.warning("Configure the admin download password before removing item codes.")
+        else:
+            remove_item_codes = st.multiselect(
+                "Codes to remove",
+                options=current_settings["Item Code"].tolist(),
+                key="formatting_remove_item_codes",
+            )
+            removal_password = st.text_input(
+                "Admin password",
+                type="password",
+                key="formatting_remove_item_codes_password",
+            )
+            remove_clicked = st.button(
+                "Remove selected codes",
+                icon=":material/delete:",
+                disabled=not remove_item_codes,
+                key="remove_formatting_item_codes",
+            )
+            if remove_clicked:
+                if not hmac.compare_digest(removal_password, admin_password):
+                    st.error("Incorrect admin password.")
+                else:
+                    updated_settings = remove_item_code_settings(edited_settings, remove_item_codes)
+                    save_formatting_settings(
+                        updated_settings,
+                        pricing_rates=get_formatting_pricing_rates(),
+                        product_name_rules=st.session_state.get(
+                            "formatting_settings_product_name_rules",
+                            get_saved_product_name_rules(),
+                        ),
+                    )
+                    st.session_state["formatting_item_code_settings"] = load_formatting_settings()
+                    st.session_state["reset_formatting_item_pricing_editor"] = True
+                    st.session_state["formatting_settings_flash"] = (
+                        "Removed item codes: " + ", ".join(remove_item_codes)
+                    )
+                    st.rerun()
+
     st.subheader("Product Name shortening rules")
     st.caption("One rule per line in the format: OLD => NEW. These rules are optional and can be applied before downloading.")
     settings_rules_key = "formatting_settings_product_name_rules"
@@ -1241,6 +1375,7 @@ def render_formatting_settings_tab() -> None:
         st.session_state["formatting_pricing_rates"] = pricing_rates
         st.session_state["formatting_saved_product_name_rules"] = saved_rules
         st.session_state["reset_formatting_product_name_rules_widgets"] = True
+        st.session_state["reset_formatting_item_pricing_editor"] = True
         st.success("Item code settings saved for future uploads.")
         st.rerun()
 
@@ -1286,7 +1421,16 @@ def render_formatting_page():
         st.session_state.pop("formatting_product_name_rules", None)
         st.session_state.pop("formatting_xlsx_product_name_rules", None)
 
-    analysis_tab, settings_tab = st.tabs(["Analysis", "Settings"])
+    item_settings = st.session_state.get("formatting_item_code_settings")
+    if item_settings is None:
+        item_settings = load_formatting_settings()
+    settings_need_prices = bool(
+        not item_settings.empty
+        and (item_settings["Unit Price"].isna() | (item_settings["Unit Price"] <= 0)).any()
+    )
+    settings_label = "Settings - action required" if settings_need_prices else "Settings"
+
+    analysis_tab, settings_tab = st.tabs(["Analysis", settings_label])
     with analysis_tab:
         render_formatting_analysis()
     with settings_tab:
@@ -1407,6 +1551,9 @@ def render_formatting_analysis():
     with preview_tab:
         st.dataframe(preview_df.head(20), width="stretch")
 
+    st.divider()
+    st.subheader("Output checks")
+    st.caption("Review product names and all analysis warnings before creating the final files.")
     download_df = render_product_name_safety_section(df_out, key_prefix="formatting")
     white_labels_pdf_bytes, white_label_count = build_long_product_white_labels_pdf(
         download_df,

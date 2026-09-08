@@ -3,9 +3,11 @@ from pathlib import Path
 import pandas as pd
 
 from core.formatting_settings import (
+    add_item_code_setting,
     load_formatting_settings,
     load_product_name_rules,
     load_pricing_rates,
+    remove_item_code_settings,
     save_formatting_settings,
     settings_to_rules,
 )
@@ -39,3 +41,41 @@ def test_analysis_and_settings_rule_editors_use_distinct_streamlit_keys():
     assert 'key=f"{key_prefix}_product_name_rules"' in app_source
     assert 'settings_rules_key = "formatting_settings_product_name_rules"' in app_source
     assert 'key="formatting_product_name_rules"' not in app_source
+
+
+def test_item_codes_can_be_added_without_a_price_then_removed():
+    settings = pd.DataFrame(
+        [{"Item Code": "EXISTING", "Product Group": "Other items", "Unit Price": 2.0}]
+    )
+
+    added = add_item_code_setting(settings, " NEW-CODE ", "Kids Hoodies")
+
+    assert added["Item Code"].tolist() == ["EXISTING", "NEW-CODE"]
+    assert added["Product Group"].tolist() == ["Other items", "Kids Hoodies"]
+    assert added.loc[0, "Unit Price"] == 2.0
+    assert pd.isna(added.loc[1, "Unit Price"])
+
+    removed = remove_item_code_settings(added, ["new-code"])
+    assert removed["Item Code"].tolist() == ["EXISTING"]
+
+
+def test_item_code_addition_rejects_case_insensitive_duplicates():
+    settings = pd.DataFrame(
+        [{"Item Code": "ABC123", "Product Group": "Other items", "Unit Price": None}]
+    )
+
+    try:
+        add_item_code_setting(settings, "abc123", "Adult Shirts")
+    except ValueError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Duplicate item code should be rejected.")
+
+
+def test_item_code_pricing_editor_is_fixed_and_removal_is_password_protected():
+    app_source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+
+    assert 'key="formatting_item_code_pricing_editor"' in app_source
+    assert 'num_rows="fixed"' in app_source
+    assert 'disabled=["Item Code"]' in app_source
+    assert "hmac.compare_digest(removal_password, admin_password)" in app_source

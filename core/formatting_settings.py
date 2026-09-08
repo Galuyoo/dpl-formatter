@@ -47,6 +47,38 @@ def load_formatting_settings(path: Path = SETTINGS_PATH) -> pd.DataFrame:
     return _settings_dataframe(rows)
 
 
+def add_item_code_setting(
+    settings_df: pd.DataFrame,
+    item_code: str,
+    product_group: str,
+) -> pd.DataFrame:
+    clean_df = _settings_dataframe(settings_df.to_dict("records"))
+    clean_code = str(item_code or "").strip()
+    if not clean_code:
+        raise ValueError("Item code is required.")
+    if product_group not in PRODUCT_GROUP_OPTIONS:
+        raise ValueError("Choose a valid product group.")
+    if clean_code.casefold() in clean_df["Item Code"].str.casefold().tolist():
+        raise ValueError(f"Item code {clean_code} already exists.")
+
+    rows = clean_df.to_dict("records")
+    rows.append({"Item Code": clean_code, "Product Group": product_group, "Unit Price": None})
+    return _settings_dataframe(rows)
+
+
+def remove_item_code_settings(
+    settings_df: pd.DataFrame,
+    item_codes: list[str],
+) -> pd.DataFrame:
+    clean_df = _settings_dataframe(settings_df.to_dict("records"))
+    remove_codes = {str(code).strip().casefold() for code in item_codes if str(code).strip()}
+    if not remove_codes:
+        return clean_df
+    return clean_df[
+        ~clean_df["Item Code"].str.casefold().isin(remove_codes)
+    ].reset_index(drop=True)
+
+
 def load_pricing_rates(defaults: dict[str, float], path: Path = SETTINGS_PATH) -> dict[str, float]:
     stored = _read_payload(path).get("pricing_rates", {})
     rates = dict(defaults)
