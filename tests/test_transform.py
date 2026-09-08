@@ -67,6 +67,7 @@ def test_build_excel_breakdown_counts_delivery_and_clothing_types():
     assert dict(zip(clothing_df["Category"], clothing_df["Count"])) == {
         "Adult Shirts": 1,
         "Adult Shirts 5XL/6XL": 0,
+        "Back attachments": 0,
         "Kids Shirts": 1,
         "Adult Jumper/Sweatshirt": 1,
         "Kids Jumper/Sweatshirt": 0,
@@ -81,17 +82,19 @@ def test_build_excel_breakdown_counts_delivery_and_clothing_types():
 def test_back_add_on_detection_counts_back_back_and_bk_markers():
     df = base_df()
     df.loc[0, "product"] = "TSHIRT-BLACK-M-Back-X1, TSHIRT-BLACK-L-BK-X2"
-    df.loc[1, "product"] = "TSHIRT-WHITE-S-BACK-X3; Mug"
+    df.loc[1, "product"] = "TSHIRT-WHITE-S-BACK-X3; TSHIRT-WHITE-M-BAC-X4; Mug"
 
-    _, _, other_df = build_excel_breakdown(df)
+    _, product_df, other_df = build_excel_breakdown(df)
     item_detail_df = build_order_item_breakdown(df)
 
     assert has_back_add_on("TSHIRT-BLACK-M-Back-X1") is True
     assert has_back_add_on("TSHIRT-BLACK-L-BK-X2") is True
     assert has_back_add_on("TSHIRT-WHITE-S-BACK-X3") is True
+    assert has_back_add_on("TSHIRT-WHITE-M-BAC-X4") is True
     assert has_back_add_on("TSHIRT-WHITE-S-FRONT-X3") is False
-    assert other_df.attrs["back_add_on_count"] == 3
-    assert int(item_detail_df["Back Add-on"].sum()) == 3
+    assert dict(zip(product_df["Category"], product_df["Count"]))["Back attachments"] == 4
+    assert other_df.attrs["back_add_on_count"] == 4
+    assert int(item_detail_df["Back Add-on"].sum()) == 4
 
 
 def test_build_management_breakdown_sheets_include_summary_pricing_and_group_details():

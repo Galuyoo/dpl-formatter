@@ -245,9 +245,11 @@ def wrap_product_name(text: str, width: int = 35) -> str:
 PRODUCT_NAME_WARNING_LIMIT = 95
 
 SHIPMENT_BREAKDOWN_LABELS = ["LBT", "Parcel", "Track24", "Parcel24"]
+BACK_ATTACHMENT_BREAKDOWN_LABEL = "Back attachments"
 CLOTHING_BREAKDOWN_LABELS = [
     "Adult Shirts",
     "Adult Shirts 5XL/6XL",
+    BACK_ATTACHMENT_BREAKDOWN_LABEL,
     "Kids Shirts",
     "Adult Jumper/Sweatshirt",
     "Kids Jumper/Sweatshirt",
@@ -300,7 +302,7 @@ DEFAULT_PRICING_AID_RATES = {
     "Track24": BILLING_DELIVERY_PRICES["Track24"],
     "Parcel24": BILLING_DELIVERY_PRICES["Parcel24"],
 }
-BACK_ADD_ON_PATTERN = re.compile(r"(?<![A-Z0-9])(?:BACK|BK)(?![A-Z0-9])", re.IGNORECASE)
+BACK_ADD_ON_PATTERN = re.compile(r"(?<![A-Z0-9])(?:BACK|BK|BAC)(?![A-Z0-9])", re.IGNORECASE)
 RL100_PATTERN = re.compile(r"(?<![A-Z0-9])RL100(?![A-Z0-9])", re.IGNORECASE)
 RL300_PATTERN = re.compile(r"(?<![A-Z0-9])RL300(?![A-Z0-9])", re.IGNORECASE)
 
@@ -441,6 +443,7 @@ def build_excel_breakdown(
         for item in split_product_items(product):
             if has_back_add_on(item):
                 back_add_on_count += 1
+                product_counts[BACK_ATTACHMENT_BREAKDOWN_LABEL] += 1
 
             product_group = classify_product_group(item, item_code_groups)
             if product_group != "Other items":
@@ -857,7 +860,10 @@ def build_management_breakdown_sheets(
 
     pricing_rows = []
     for row in clothing_df.itertuples(index=False):
-        if row.Category == ADULT_SHIRT_PREMIUM_BREAKDOWN_LABEL:
+        if row.Category in {
+            ADULT_SHIRT_PREMIUM_BREAKDOWN_LABEL,
+            BACK_ATTACHMENT_BREAKDOWN_LABEL,
+        }:
             continue
         pricing_rows.append(
             {
