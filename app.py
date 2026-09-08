@@ -223,6 +223,7 @@ def render_admin_excel_download(
     key_prefix: str,
     item_code_groups: dict[str, str] | None = None,
     item_code_prices: dict[str, float] | None = None,
+    pricing_rates: dict[str, float] | None = None,
 ) -> bool:
     password = get_admin_download_password()
     unlocked_key = f"{key_prefix}_admin_excel_unlocked"
@@ -245,6 +246,7 @@ def render_admin_excel_download(
                 download_df,
                 item_code_groups=item_code_groups,
                 item_code_prices=item_code_prices,
+                pricing_rates=pricing_rates,
             )
         )
         download_clicked = st.download_button(
@@ -611,6 +613,7 @@ def render_excel_breakdown_tab(
         )
 
     other_item_prices = {}
+    pricing_rates = get_formatting_pricing_rates()
     configured_unpriced_codes = [
         code for code in (item_code_groups or {}) if code not in (item_code_prices or {})
     ]
@@ -631,7 +634,13 @@ def render_excel_breakdown_tab(
             .reset_index(name="Count")
             .sort_values(["Product Group", "Product Item"])
         )
-        other_pricing_df["Unit Price"] = None
+        special_item_rates = {
+            "RL100": float(pricing_rates.get("rl100", 0.0) or 0.0),
+            "RL300": float(pricing_rates.get("rl300", 0.0) or 0.0),
+        }
+        other_pricing_df["Unit Price"] = other_pricing_df["Product Group"].map(
+            lambda group: special_item_rates.get(group) or None
+        )
         edited_other_pricing_df = st.data_editor(
             other_pricing_df,
             width="stretch",
@@ -650,7 +659,6 @@ def render_excel_breakdown_tab(
             if pd.notna(unit_price):
                 other_item_prices[row["Product Item"]] = float(unit_price)
 
-    pricing_rates = get_formatting_pricing_rates()
     pricing_detail_df, pricing_summary_df = build_pricing_aid_details(
         item_detail_df,
         rates=pricing_rates,
@@ -1178,6 +1186,8 @@ def render_formatting_settings_tab() -> None:
         "pricing_aid_kids_jumper": "kids_jumper",
         "pricing_aid_adult_hoodie": "adult_hoodie",
         "pricing_aid_kids_hoodie": "kids_hoodie",
+        "pricing_aid_rl100": "rl100",
+        "pricing_aid_rl300": "rl300",
         "pricing_aid_lbt": "LBT",
         "pricing_aid_parcel": "Parcel",
         "pricing_aid_track24": "Track24",
@@ -1185,7 +1195,7 @@ def render_formatting_settings_tab() -> None:
     }.items():
         st.session_state.setdefault(widget_key, float(pricing_rates[rate_key]))
 
-    price_cols = st.columns(3)
+    price_cols = st.columns(4)
     with price_cols[0]:
         st.number_input("Adult Shirt up to 4XL", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_adult_shirt_standard")
         st.number_input("Adult Shirt 5XL/6XL", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_adult_shirt_premium")
@@ -1199,6 +1209,10 @@ def render_formatting_settings_tab() -> None:
         st.number_input("Kids Hoodie", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_kids_hoodie")
 
     with price_cols[2]:
+        st.number_input("RL100", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_rl100")
+        st.number_input("RL300", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_rl300")
+
+    with price_cols[3]:
         st.number_input("LBT", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_lbt")
         st.number_input("Parcel", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_parcel")
         st.number_input("Track24", min_value=0.0, step=0.1, format="%.2f", key="pricing_aid_track24")
@@ -1252,6 +1266,8 @@ def get_formatting_pricing_rates() -> dict[str, float]:
         "pricing_aid_kids_jumper": "kids_jumper",
         "pricing_aid_adult_hoodie": "adult_hoodie",
         "pricing_aid_kids_hoodie": "kids_hoodie",
+        "pricing_aid_rl100": "rl100",
+        "pricing_aid_rl300": "rl300",
         "pricing_aid_lbt": "LBT",
         "pricing_aid_parcel": "Parcel",
         "pricing_aid_track24": "Track24",
@@ -1456,6 +1472,7 @@ def render_formatting_analysis():
             key_prefix="formatting_xlsx",
             item_code_groups=item_code_groups,
             item_code_prices=item_code_prices,
+            pricing_rates=get_formatting_pricing_rates(),
         )
         if xlsx_clicked:
             log_event(

@@ -292,6 +292,8 @@ DEFAULT_PRICING_AID_RATES = {
     "kids_jumper": BILLING_ITEM_PRICES["Kids Jumper/Sweatshirt"],
     "adult_hoodie": BILLING_ITEM_PRICES["Adult Hoodies"],
     "kids_hoodie": BILLING_ITEM_PRICES["Kids Hoodies"],
+    "rl100": 0.0,
+    "rl300": 0.0,
     "back_add_on": 0.0,
     "LBT": BILLING_DELIVERY_PRICES["LBT"],
     "Parcel": BILLING_DELIVERY_PRICES["Parcel"],
@@ -541,15 +543,30 @@ def build_order_item_breakdown(
     )
 
 
-def get_billing_item_price(product_group: str, product_item: str) -> float | None:
+def get_billing_item_price(
+    product_group: str,
+    product_item: str,
+    rates: dict[str, float] | None = None,
+) -> float | None:
+    active_rates = {**DEFAULT_PRICING_AID_RATES, **(rates or {})}
     if product_group == "Adult Shirts":
         item_size_tokens = set(extract_size_tokens(product_item))
         if item_size_tokens & ADULT_SHIRT_PREMIUM_SIZE_TOKENS:
-            return ADULT_SHIRT_PREMIUM_PRICE
-        return ADULT_SHIRT_STANDARD_PRICE
+            return active_rates["adult_shirt_premium"]
+        return active_rates["adult_shirt_standard"]
 
-    if product_group in BILLING_ITEM_PRICES:
-        return BILLING_ITEM_PRICES[product_group]
+    group_rate_keys = {
+        "Kids Shirts": "kids_shirt",
+        "Adult Jumper/Sweatshirt": "adult_jumper",
+        "Kids Jumper/Sweatshirt": "kids_jumper",
+        "Adult Hoodies": "adult_hoodie",
+        "Kids Hoodies": "kids_hoodie",
+        "RL100": "rl100",
+        "RL300": "rl300",
+    }
+    if product_group in group_rate_keys:
+        item_rate = float(active_rates.get(group_rate_keys[product_group], 0.0) or 0.0)
+        return item_rate if item_rate > 0 else None
 
     return None
 
@@ -573,13 +590,15 @@ def get_pricing_aid_item_price(
     active_rates = {**DEFAULT_PRICING_AID_RATES, **(rates or {})}
     active_other_prices = other_item_prices or {}
     normalized_item = str(product_item).upper()
+    if product_item in active_other_prices:
+        return active_other_prices[product_item]
     for item_code, price in (item_code_prices or {}).items():
         if str(item_code).upper() in normalized_item:
             return price
     for item_code in (item_code_groups or {}):
         if str(item_code).upper() in normalized_item:
-            if product_item in active_other_prices:
-                return active_other_prices[product_item]
+            if product_group in {"RL100", "RL300"}:
+                break
             return None
 
     if product_group == "Adult Shirts":
@@ -599,8 +618,13 @@ def get_pricing_aid_item_price(
     if product_group in group_rate_keys:
         return active_rates[group_rate_keys[product_group]]
 
-    if product_group in {"Other items", "RL100", "RL300"}:
-        return active_other_prices.get(product_item)
+    special_rate_key = {"RL100": "rl100", "RL300": "rl300"}.get(product_group)
+    if special_rate_key:
+        special_rate = float(active_rates.get(special_rate_key, 0.0) or 0.0)
+        return special_rate if special_rate > 0 else None
+
+    if product_group == "Other items":
+        return None
 
     return None
 
@@ -701,17 +725,23 @@ def build_pricing_aid_details(
 def build_billing_details(
     item_detail_df: pd.DataFrame,
     item_code_prices: dict[str, float] | None = None,
+    pricing_rates: dict[str, float] | None = None,
 ) -> pd.DataFrame:
+    active_rates = {**DEFAULT_PRICING_AID_RATES, **(pricing_rates or {})}
     rows = []
     charged_order_rows = set()
 
     for line_number, row in enumerate(item_detail_df.to_dict("records"), start=1):
         item_price = get_custom_item_code_price(row["Product Item"], item_code_prices)
         if item_price is None:
-            item_price = get_billing_item_price(row["Product Group"], row["Product Item"])
+            item_price = get_billing_item_price(
+                row["Product Group"],
+                row["Product Item"],
+                active_rates,
+            )
         order_row = row["Order Row"]
         is_first_item_for_order = order_row not in charged_order_rows
-        shipping_price = BILLING_DELIVERY_PRICES.get(row["Order Delivery Type"], 0) if is_first_item_for_order else 0
+        shipping_price = active_rates.get(row["Order Delivery Type"], 0) if is_first_item_for_order else 0
         charged_order_rows.add(order_row)
         excel_row = line_number + 1
 
@@ -766,20 +796,23 @@ def build_billing_details(
     )
 
 
-def build_billing_rates() -> pd.DataFrame:
+def build_billing_rates(pricing_rates: dict[str, float] | None = None) -> pd.DataFrame:
+    active_rates = {**DEFAULT_PRICING_AID_RATES, **(pricing_rates or {})}
     return pd.DataFrame(
         [
-            {"Type": "Item", "Category": "Adult Shirt up to 4XL", "Price": ADULT_SHIRT_STANDARD_PRICE},
-            {"Type": "Item", "Category": "Adult Shirt 5XL/6XL", "Price": ADULT_SHIRT_PREMIUM_PRICE},
-            {"Type": "Item", "Category": "Kids Shirt", "Price": BILLING_ITEM_PRICES["Kids Shirts"]},
-            {"Type": "Item", "Category": "Adult Jumper/Sweatshirt", "Price": BILLING_ITEM_PRICES["Adult Jumper/Sweatshirt"]},
-            {"Type": "Item", "Category": "Kids Jumper/Sweatshirt", "Price": BILLING_ITEM_PRICES["Kids Jumper/Sweatshirt"]},
-            {"Type": "Item", "Category": "Adult Hoodie", "Price": BILLING_ITEM_PRICES["Adult Hoodies"]},
-            {"Type": "Item", "Category": "Kids Hoodie", "Price": BILLING_ITEM_PRICES["Kids Hoodies"]},
-            {"Type": "Delivery", "Category": "LBT", "Price": BILLING_DELIVERY_PRICES["LBT"]},
-            {"Type": "Delivery", "Category": "Parcel", "Price": BILLING_DELIVERY_PRICES["Parcel"]},
-            {"Type": "Delivery", "Category": "Track24", "Price": BILLING_DELIVERY_PRICES["Track24"]},
-            {"Type": "Delivery", "Category": "Parcel24", "Price": BILLING_DELIVERY_PRICES["Parcel24"]},
+            {"Type": "Item", "Category": "Adult Shirt up to 4XL", "Price": active_rates["adult_shirt_standard"]},
+            {"Type": "Item", "Category": "Adult Shirt 5XL/6XL", "Price": active_rates["adult_shirt_premium"]},
+            {"Type": "Item", "Category": "Kids Shirt", "Price": active_rates["kids_shirt"]},
+            {"Type": "Item", "Category": "Adult Jumper/Sweatshirt", "Price": active_rates["adult_jumper"]},
+            {"Type": "Item", "Category": "Kids Jumper/Sweatshirt", "Price": active_rates["kids_jumper"]},
+            {"Type": "Item", "Category": "Adult Hoodie", "Price": active_rates["adult_hoodie"]},
+            {"Type": "Item", "Category": "Kids Hoodie", "Price": active_rates["kids_hoodie"]},
+            {"Type": "Item", "Category": "RL100", "Price": active_rates["rl100"]},
+            {"Type": "Item", "Category": "RL300", "Price": active_rates["rl300"]},
+            {"Type": "Delivery", "Category": "LBT", "Price": active_rates["LBT"]},
+            {"Type": "Delivery", "Category": "Parcel", "Price": active_rates["Parcel"]},
+            {"Type": "Delivery", "Category": "Track24", "Price": active_rates["Track24"]},
+            {"Type": "Delivery", "Category": "Parcel24", "Price": active_rates["Parcel24"]},
         ],
         columns=["Type", "Category", "Price"],
     )
@@ -790,11 +823,12 @@ def build_management_breakdown_sheets(
     click_drop_df: pd.DataFrame,
     item_code_groups: dict[str, str] | None = None,
     item_code_prices: dict[str, float] | None = None,
+    pricing_rates: dict[str, float] | None = None,
 ) -> dict[str, pd.DataFrame]:
     shipment_df, clothing_df, other_df = build_excel_breakdown(df_in, item_code_groups)
     item_detail_df = build_order_item_breakdown(df_in, item_code_groups)
-    billing_details_df = build_billing_details(item_detail_df, item_code_prices)
-    billing_rates_df = build_billing_rates()
+    billing_details_df = build_billing_details(item_detail_df, item_code_prices, pricing_rates)
+    billing_rates_df = build_billing_rates(pricing_rates)
 
     total_orders = len(df_in)
     total_items = len(item_detail_df)

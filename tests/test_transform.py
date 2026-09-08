@@ -343,6 +343,67 @@ def test_rl300_is_its_own_manual_priced_item_group():
     assert summary["Unpriced manual items"] == 0
 
 
+def test_rl100_and_rl300_use_saved_pricing_aider_rates():
+    df = base_df()
+    df.loc[0, "product"] = "RL100"
+    df.loc[1, "product"] = "RL300"
+    item_detail_df = build_order_item_breakdown(df)
+
+    pricing_df, summary_df = build_pricing_aid_details(
+        item_detail_df,
+        rates={"rl100": 2.25, "rl300": 3.25},
+    )
+
+    assert pricing_df["Item Price"].tolist() == [2.25, 3.25]
+    assert dict(zip(summary_df["Category"], summary_df["Amount"]))["Unpriced manual items"] == 0
+
+
+def test_blank_rl100_and_rl300_rates_still_require_pricing():
+    df = base_df()
+    df.loc[0, "product"] = "RL100"
+    df.loc[1, "product"] = "RL300"
+    item_detail_df = build_order_item_breakdown(df)
+
+    pricing_df, summary_df = build_pricing_aid_details(item_detail_df)
+
+    assert pricing_df["Item Price"].isna().all()
+    assert dict(zip(summary_df["Category"], summary_df["Amount"]))["Unpriced manual items"] == 2
+
+
+def test_saved_rl_rate_survives_blank_item_code_rule():
+    df = base_df().iloc[[0]].copy()
+    df.loc[df.index[0], "product"] = "RL100"
+    item_detail_df = build_order_item_breakdown(df, item_code_groups={"RL100": "RL100"})
+
+    pricing_df, _ = build_pricing_aid_details(
+        item_detail_df,
+        rates={"rl100": 2.25},
+        item_code_groups={"RL100": "RL100"},
+    )
+
+    assert pricing_df.iloc[0]["Item Price"] == 2.25
+
+
+def test_management_workbook_uses_saved_rl100_and_rl300_rates():
+    df = base_df()
+    df.loc[0, "product"] = "RL100"
+    df.loc[1, "product"] = "RL300"
+    _, click_drop_df, _ = transform_orders(df)
+
+    sheets = build_management_breakdown_sheets(
+        df,
+        click_drop_df,
+        pricing_rates={"rl100": 2.25, "rl300": 3.25},
+    )
+
+    billing_items = sheets["Billing Details"].iloc[:-1]
+    assert billing_items["Item Price"].tolist() == [2.25, 3.25]
+
+    billing_rates = sheets["Billing Rates"].set_index("Category")["Price"].to_dict()
+    assert billing_rates["RL100"] == 2.25
+    assert billing_rates["RL300"] == 3.25
+
+
 def test_billing_details_adds_item_shipping_and_total_formulas():
     df = base_df()
     df.loc[0, "product"] = "TSHIRT-BLACK-4XL-X1, TSHIRT-BLACK-5XL-X2, TSHIRT-RED-3/4-X3"
