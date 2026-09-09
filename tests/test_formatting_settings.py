@@ -79,3 +79,11 @@ def test_item_code_pricing_editor_is_fixed_and_removal_is_password_protected():
     assert 'num_rows="fixed"' in app_source
     assert 'disabled=["Item Code"]' in app_source
     assert "hmac.compare_digest(removal_password, admin_password)" in app_source
+
+
+def test_product_breakdown_displays_numbered_back_attachment_orders():
+    app_source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+
+    assert 'back_attachment_df.insert(0, "Attachment #"' in app_source
+    assert "Orders with back attachments" in app_source
+    assert '"Back attachments",\n            len(back_attachment_df)' in app_source

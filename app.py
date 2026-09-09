@@ -604,6 +604,18 @@ def render_excel_breakdown_tab(
 
     with breakdown_right:
         st.markdown("**Product breakdown**")
+        back_attachment_df = item_detail_df.loc[
+            item_detail_df["Back Add-on"],
+            ["Order Reference", "Product Item"],
+        ].copy()
+        back_attachment_df.insert(0, "Attachment #", range(1, len(back_attachment_df) + 1))
+        back_attachment_order_count = int(back_attachment_df["Order Reference"].nunique())
+        st.metric(
+            "Back attachments",
+            len(back_attachment_df),
+            f"Across {back_attachment_order_count} order(s)",
+            border=True,
+        )
         st.dataframe(
             clothing_df,
             width="stretch",
@@ -613,6 +625,18 @@ def render_excel_breakdown_tab(
                 "Count": st.column_config.NumberColumn("Items", format="%d"),
             },
         )
+        if not back_attachment_df.empty:
+            st.markdown("**Orders with back attachments**")
+            st.dataframe(
+                back_attachment_df,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Attachment #": st.column_config.NumberColumn("#", format="%d", pinned=True),
+                    "Order Reference": st.column_config.TextColumn("Order", pinned=True),
+                    "Product Item": st.column_config.TextColumn("Product"),
+                },
+            )
 
     if other_df.empty:
         st.success("No unrecognized items detected.", icon=":material/check_circle:")
