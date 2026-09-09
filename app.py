@@ -1,4 +1,5 @@
 import hmac
+import io
 import os
 from datetime import datetime
 
@@ -777,40 +778,34 @@ def render_excel_breakdown_tab(
 
 # ---------- Streamlit pages ----------
 
-def render_full_fulfilment_workflow():
-    st.caption(
-        "One-page workflow: upload orders, generate Click & Drop CSV, then return here with the labels PDF to add tracking."
-    )
+def init_fulfilment_state() -> None:
+    defaults = {
+        "fulfilment_input_name": "",
+        "fulfilment_input_type": "",
+        "fulfilment_df_in": None,
+        "fulfilment_preview_df": None,
+        "fulfilment_df_out": None,
+        "fulfilment_stats": None,
+        "fulfilment_tracking_df": None,
+        "fulfilment_audit_df": None,
+        "fulfilment_labels_pdf_name": "",
+        "fulfilment_labels_pdf_bytes": None,
+        "fulfilment_white_labels_pdf_name": "",
+        "fulfilment_white_labels_pdf_bytes": None,
+        "fulfilment_paired_labels_pdf_bytes": None,
+        "fulfilment_paired_labels_pdf_name": "",
+    }
 
-    if "fulfilment_input_name" not in st.session_state:
-        st.session_state["fulfilment_input_name"] = ""
-    if "fulfilment_input_type" not in st.session_state:
-        st.session_state["fulfilment_input_type"] = ""
-    if "fulfilment_df_in" not in st.session_state:
-        st.session_state["fulfilment_df_in"] = None
-    if "fulfilment_preview_df" not in st.session_state:
-        st.session_state["fulfilment_preview_df"] = None
-    if "fulfilment_df_out" not in st.session_state:
-        st.session_state["fulfilment_df_out"] = None
-    if "fulfilment_stats" not in st.session_state:
-        st.session_state["fulfilment_stats"] = None
-    if "fulfilment_tracking_df" not in st.session_state:
-        st.session_state["fulfilment_tracking_df"] = None
-    if "fulfilment_audit_df" not in st.session_state:
-        st.session_state["fulfilment_audit_df"] = None
-    if "fulfilment_labels_pdf_name" not in st.session_state:
-        st.session_state["fulfilment_labels_pdf_name"] = ""
-    if "fulfilment_labels_pdf_bytes" not in st.session_state:
-        st.session_state["fulfilment_labels_pdf_bytes"] = None
-    if "fulfilment_paired_labels_pdf_bytes" not in st.session_state:
-        st.session_state["fulfilment_paired_labels_pdf_bytes"] = None
-    if "fulfilment_paired_labels_pdf_name" not in st.session_state:
-        st.session_state["fulfilment_paired_labels_pdf_name"] = ""
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-    st.subheader("Step 1 — Upload orders and generate Click & Drop file")
+
+def render_fulfilment_orders_tab() -> None:
+    st.subheader("Step 1 - Upload orders and generate Click & Drop file")
 
     with st.container(border=True):
-        st.markdown("### 📄 Orders File")
+        st.markdown("### Orders File")
         st.caption("Upload the original CSV / Excel orders file once. The app will remember it for the tracking step.")
         uploaded_file = st.file_uploader(
             "Drop your orders file here (.csv / .xlsx / .xls)",
@@ -848,11 +843,12 @@ def render_full_fulfilment_workflow():
                 st.session_state["fulfilment_df_out"] = df_out
                 st.session_state["fulfilment_stats"] = stats
 
-                # Reset tracking result when a new orders file is uploaded.
                 st.session_state["fulfilment_tracking_df"] = None
                 st.session_state["fulfilment_audit_df"] = None
                 st.session_state["fulfilment_labels_pdf_name"] = ""
                 st.session_state["fulfilment_labels_pdf_bytes"] = None
+                st.session_state["fulfilment_white_labels_pdf_name"] = ""
+                st.session_state["fulfilment_white_labels_pdf_bytes"] = None
                 st.session_state["fulfilment_paired_labels_pdf_bytes"] = None
                 st.session_state["fulfilment_paired_labels_pdf_name"] = ""
 
@@ -924,7 +920,7 @@ def render_full_fulfilment_workflow():
 
     with col1:
         st.download_button(
-            label="⬇️ Download Click & Drop CSV",
+            label="Download Click & Drop CSV",
             data=csv_bytes,
             file_name=csv_name,
             mime="text/csv",
@@ -937,7 +933,7 @@ def render_full_fulfilment_workflow():
             df_in=df_in,
             download_df=download_df,
             file_name=xlsx_name,
-            button_label="⬇️ Download Excel for checking",
+            button_label="Download Excel for checking",
             key_prefix="fulfilment_click_drop_xlsx",
         )
 
@@ -957,13 +953,16 @@ def render_full_fulfilment_workflow():
     with st.expander("Preview formatted rows", expanded=False):
         st.dataframe(preview_df.head(20), width="stretch")
 
-    st.divider()
 
-    st.subheader("Step 2 — Upload labels PDF and add tracking")
-    st.caption(
-        "After you create Royal Mail labels manually, come back here and upload the labels PDF. "
-        "The original orders file is already remembered."
-    )
+def render_fulfilment_tracking_tab() -> None:
+    st.subheader("Step 2 - Upload labels PDF and add tracking")
+
+    df_in = st.session_state["fulfilment_df_in"]
+    if df_in is None:
+        st.warning("Upload and process an orders file in the Orders tab first.")
+        return
+
+    st.info(f"Remembered orders file: {st.session_state['fulfilment_input_name']}")
 
     label_col, white_label_col = st.columns(2)
 
@@ -982,12 +981,20 @@ def render_full_fulfilment_workflow():
             help="Optional. The app places white label/invoice pages before the Royal Mail label and skips StoreFeeder CourierError pages.",
         )
 
-    if labels_pdf is None:
+    if labels_pdf is not None:
+        st.session_state["fulfilment_labels_pdf_name"] = labels_pdf.name
+        st.session_state["fulfilment_labels_pdf_bytes"] = labels_pdf.getvalue()
+
+    if white_labels_pdf is not None:
+        st.session_state["fulfilment_white_labels_pdf_name"] = white_labels_pdf.name
+        st.session_state["fulfilment_white_labels_pdf_bytes"] = white_labels_pdf.getvalue()
+        st.session_state["fulfilment_paired_labels_pdf_bytes"] = None
+        st.session_state["fulfilment_paired_labels_pdf_name"] = ""
+
+    labels_pdf_bytes = st.session_state.get("fulfilment_labels_pdf_bytes")
+    if labels_pdf_bytes is None:
         st.info("Waiting for labels PDF")
         return
-
-    st.session_state["fulfilment_labels_pdf_name"] = labels_pdf.name
-    st.session_state["fulfilment_labels_pdf_bytes"] = labels_pdf.getvalue()
 
     skip_pages_without_tracking = st.checkbox(
         "Skip PDF pages with no tracking number",
@@ -997,9 +1004,8 @@ def render_full_fulfilment_workflow():
     )
 
     try:
-        labels_pdf.seek(0)
         labels = extract_label_pages(
-            labels_pdf,
+            io.BytesIO(labels_pdf_bytes),
             skip_pages_without_tracking=skip_pages_without_tracking,
         )
     except Exception as e:
@@ -1012,8 +1018,9 @@ def render_full_fulfilment_workflow():
     m2.metric("Tracking labels found" if skip_pages_without_tracking else "Label pages", len(labels))
 
     if len(df_in) != len(labels):
+        label_name = "tracking labels" if skip_pages_without_tracking else "pages"
         st.error(
-            f"Row count mismatch: remembered order file has {len(df_in)} rows but labels PDF has {len(labels)} pages"
+            f"Row count mismatch: remembered order file has {len(df_in)} rows but labels PDF has {len(labels)} {label_name}"
         )
         return
 
@@ -1030,10 +1037,9 @@ def render_full_fulfilment_workflow():
         status_text = status_placeholder.empty()
 
         try:
-            labels_pdf.seek(0)
             tracking_df, audit_df = add_tracking_column_from_labels(
                 df_in,
-                labels_pdf,
+                io.BytesIO(labels_pdf_bytes),
                 progress_bar=progress_bar,
                 status_text=status_text,
                 skip_pages_without_tracking=skip_pages_without_tracking,
@@ -1044,19 +1050,18 @@ def render_full_fulfilment_workflow():
             st.session_state["fulfilment_paired_labels_pdf_bytes"] = None
             st.session_state["fulfilment_paired_labels_pdf_name"] = ""
 
-            if white_labels_pdf is not None:
-                labels_pdf.seek(0)
-                white_labels_pdf.seek(0)
+            white_labels_pdf_bytes = st.session_state.get("fulfilment_white_labels_pdf_bytes")
+            if white_labels_pdf_bytes is not None:
                 paired_pdf_bytes = build_paired_labels_pdf(
-                    labels_pdf,
-                    white_labels_pdf,
+                    io.BytesIO(labels_pdf_bytes),
+                    io.BytesIO(white_labels_pdf_bytes),
                     df_in["order reference"].tolist(),
                     order_rows=df_in,
                     skip_pages_without_tracking=skip_pages_without_tracking,
                     allow_missing_white_labels=True,
                     skip_courier_error_pages=True,
                 )
-                base_name, _ = os.path.splitext(labels_pdf.name)
+                base_name, _ = os.path.splitext(st.session_state.get("fulfilment_labels_pdf_name", "labels.pdf"))
                 st.session_state["fulfilment_paired_labels_pdf_bytes"] = paired_pdf_bytes
                 st.session_state["fulfilment_paired_labels_pdf_name"] = (
                     f"{base_name}_paired_with_white_labels.pdf"
@@ -1082,8 +1087,8 @@ def render_full_fulfilment_workflow():
                 file_name=st.session_state["fulfilment_input_name"],
                 file_type=st.session_state["fulfilment_input_type"],
                 input_rows=len(df_in),
-                tracking_labels_found=len(labels) if "labels" in locals() else None,
-                skip_pages_without_tracking=skip_pages_without_tracking if "skip_pages_without_tracking" in locals() else None,
+                tracking_labels_found=len(labels),
+                skip_pages_without_tracking=skip_pages_without_tracking,
                 success=False,
                 error_message=str(e),
                 app_name=APP_NAME,
@@ -1101,20 +1106,20 @@ def render_full_fulfilment_workflow():
     if tracking_df is None:
         return
 
-    if st.session_state.get("fulfilment_paired_labels_pdf_bytes") is None and white_labels_pdf is not None:
+    white_labels_pdf_bytes = st.session_state.get("fulfilment_white_labels_pdf_bytes")
+    paired_pdf_bytes = st.session_state.get("fulfilment_paired_labels_pdf_bytes")
+    if paired_pdf_bytes is None and white_labels_pdf_bytes is not None:
         try:
-            labels_pdf.seek(0)
-            white_labels_pdf.seek(0)
             paired_pdf_bytes = build_paired_labels_pdf(
-                labels_pdf,
-                white_labels_pdf,
+                io.BytesIO(labels_pdf_bytes),
+                io.BytesIO(white_labels_pdf_bytes),
                 df_in["order reference"].tolist(),
                 order_rows=df_in,
                 skip_pages_without_tracking=skip_pages_without_tracking,
                 allow_missing_white_labels=True,
                 skip_courier_error_pages=True,
             )
-            base_name, _ = os.path.splitext(labels_pdf.name)
+            base_name, _ = os.path.splitext(st.session_state.get("fulfilment_labels_pdf_name", "labels.pdf"))
             st.session_state["fulfilment_paired_labels_pdf_bytes"] = paired_pdf_bytes
             st.session_state["fulfilment_paired_labels_pdf_name"] = (
                 f"{base_name}_paired_with_white_labels.pdf"
@@ -1140,7 +1145,7 @@ def render_full_fulfilment_workflow():
 
     with t1:
         st.download_button(
-            label="⬇️ Download Tracking CSV",
+            label="Download Tracking CSV",
             data=tracking_csv_bytes,
             file_name=tracking_csv_name,
             mime="text/csv",
@@ -1150,7 +1155,7 @@ def render_full_fulfilment_workflow():
 
     with t2:
         st.download_button(
-            label="⬇️ Download Tracking Excel",
+            label="Download Tracking Excel",
             data=tracking_excel_bytes,
             file_name=tracking_xlsx_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1171,6 +1176,24 @@ def render_full_fulfilment_workflow():
         else:
             st.info("Upload white labels PDF before running to create paired labels.")
 
+    if audit_df is not None:
+        with st.expander("Preview verified tracking rows", expanded=False):
+            st.dataframe(audit_df.head(20), width="stretch")
+
+
+def render_fulfilment_email_tab() -> None:
+    st.subheader("Step 3 - Email / Finish")
+
+    tracking_df = st.session_state["fulfilment_tracking_df"]
+    if tracking_df is None:
+        st.info("Add tracking in the Labels & Tracking tab before sending emails.")
+        return
+
+    base_name, _ = os.path.splitext(st.session_state["fulfilment_input_name"])
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    tracking_csv_name = f"{base_name}_with_tracking_{stamp}.csv"
+    tracking_csv_bytes = tracking_df.to_csv(index=False).encode("utf-8")
+
     render_email_results_section(
         tracking_csv_bytes=tracking_csv_bytes,
         tracking_csv_name=tracking_csv_name,
@@ -1178,10 +1201,26 @@ def render_full_fulfilment_workflow():
         labels_pdf_name=st.session_state.get("fulfilment_labels_pdf_name", "labels.pdf"),
     )
 
-    if audit_df is not None:
-        with st.expander("Preview verified tracking rows", expanded=False):
-            st.dataframe(audit_df.head(20), width="stretch")
 
+def render_full_fulfilment_workflow():
+    st.caption(
+        "One workflow split into tabs. Upload orders, generate Click & Drop CSV, add tracking, then email the results."
+    )
+
+    init_fulfilment_state()
+
+    orders_tab, tracking_tab, email_tab = st.tabs(
+        ["1. Orders", "2. Labels & Tracking", "3. Email / Finish"]
+    )
+
+    with orders_tab:
+        render_fulfilment_orders_tab()
+
+    with tracking_tab:
+        render_fulfilment_tracking_tab()
+
+    with email_tab:
+        render_fulfilment_email_tab()
 
 def render_formatting_settings_tab() -> None:
     if st.session_state.pop("reset_formatting_item_pricing_editor", False):
@@ -2035,24 +2074,29 @@ def main():
         log_event("app_open", success=True, app_name=APP_NAME, app_version=APP_VERSION)
         st.session_state["app_open_logged"] = True
 
-    workflow_options = ["Full Fulfilment Workflow", "Formatting", "Add Tracking"]
+    render_full_fulfilment_workflow()
+
+    advanced_options = ["Select a tool", "Formatting only", "Add tracking only"]
     if is_local_environment():
-        workflow_options.append("StoreFeeder Test")
+        advanced_options.append("StoreFeeder Test")
 
-    mode = st.radio(
-        "Workflow",
-        workflow_options,
-        horizontal=True,
-    )
+    with st.expander("Advanced tools", expanded=False):
+        st.caption("Fallback tools for special cases. Daily DPL work should use the tabs above.")
+        advanced_mode = st.radio(
+            "Advanced workflow",
+            advanced_options,
+            horizontal=True,
+            key="advanced_workflow_mode",
+        )
 
-    if mode == "Full Fulfilment Workflow":
-        render_full_fulfilment_workflow()
-    elif mode == "Formatting":
-        render_formatting_page()
-    elif mode == "Add Tracking":
-        render_add_tracking_page()
-    else:
-        render_storefeeder_test_page()
+        if advanced_mode == "Select a tool":
+            st.info("Choose a fallback tool when you need one.")
+        elif advanced_mode == "Formatting only":
+            render_formatting_page()
+        elif advanced_mode == "Add tracking only":
+            render_add_tracking_page()
+        else:
+            render_storefeeder_test_page()
 
 
 if __name__ == "__main__":
